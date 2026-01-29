@@ -1,15 +1,38 @@
-import React, { useState } from 'react';
-import { Package, Shield, TrendingUp, Users, Search, Scan, CheckCircle, ArrowRight, Globe, Lock, Zap } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Package, Shield, TrendingUp, Users, Search, Scan, CheckCircle, ArrowRight, Globe, Lock, Zap, LogOut } from 'lucide-react';
 
 export default function MainWebsite() {
   const [productId, setProductId] = useState('');
   const [showScanner, setShowScanner] = useState(false);
+  const [user, setUser] = useState(null);
+
+  // Check if user is logged in on component mount
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    const userData = localStorage.getItem('user');
+    if (token && userData) {
+      try {
+        setUser(JSON.parse(userData));
+      } catch (err) {
+        console.error('Error parsing user data:', err);
+        // Clear invalid user data
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+      }
+    }
+  }, []);
 
   const handleSearch = () => {
     if (productId) {
       // Redirect to verification page with product ID
       window.location.href = `/verify?id=${productId}`;
     }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    window.location.href = '/login';
   };
 
   return (
@@ -28,9 +51,25 @@ export default function MainWebsite() {
               <a href="#how-it-works" className="text-gray-700 hover:text-blue-600 font-medium transition">How It Works</a>
               <a href="#verify" className="text-gray-700 hover:text-blue-600 font-medium transition">Verify Product</a>
             </div>
-            <a href="/login" className="px-6 py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition">
-              Login
-            </a>
+            {user ? (
+              <div className="flex items-center space-x-4">
+                <div className="text-right hidden sm:block">
+                  <div className="font-semibold text-gray-900">{user.name}</div>
+                  <div className="text-sm text-gray-600">{user.company}</div>
+                </div>
+                <button
+                  onClick={handleLogout}
+                  className="flex items-center space-x-2 px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg transition"
+                >
+                  <LogOut size={18} />
+                  <span>Logout</span>
+                </button>
+              </div>
+            ) : (
+              <a href="/login" className="px-6 py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition">
+                Login
+              </a>
+            )}
           </div>
         </div>
       </nav>
@@ -262,12 +301,15 @@ export default function MainWebsite() {
           <h2 className="text-4xl font-bold text-gray-900 mb-4">Ready to Transform Your Supply Chain?</h2>
           <p className="text-xl text-gray-600 mb-8">Join hundreds of companies already using ChainTrack</p>
           <div className="flex flex-wrap gap-4 justify-center">
-            <a href="/login" className="px-8 py-4 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition">
-              Get Started
+            <a href="#verify" className="px-8 py-4 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition">
+              Verify Product
             </a>
-            <a href="#features" className="px-8 py-4 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:border-blue-600 hover:text-blue-600 transition">
-              Learn More
-            </a>
+            <button
+              onClick={handleLogout}
+              className="px-8 py-4 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:border-blue-600 hover:text-blue-600 transition"
+            >
+              Switch Account
+            </button>
           </div>
         </div>
       </section>

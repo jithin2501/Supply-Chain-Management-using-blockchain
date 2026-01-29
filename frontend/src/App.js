@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import MainWebsite from './components/MainWebsite';
@@ -20,9 +21,32 @@ function PrivateRoute({ children, allowedRoles }) {
       admin: '/admin/dashboard',
       suppliers: '/supplier/dashboard',
       manufacturers: '/manufacturer/dashboard',
-      customers: '/customer/dashboard'
+      customers: '/main' // Customers go to main website
     };
-    return <Navigate to={redirectMap[user.role] || '/'} />;
+    return <Navigate to={redirectMap[user.role] || '/login'} />;
+  }
+
+  return children;
+}
+
+// Special route for main website - only accessible to logged-in customers
+function MainWebsiteRoute({ children }) {
+  const token = localStorage.getItem('token');
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+
+  // If no token, go to login
+  if (!token) {
+    return <Navigate to="/login" />;
+  }
+
+  // If logged in but NOT a customer, redirect to appropriate dashboard
+  if (user.role !== 'customers') {
+    const redirectMap = {
+      admin: '/admin/dashboard',
+      suppliers: '/supplier/dashboard',
+      manufacturers: '/manufacturer/dashboard'
+    };
+    return <Navigate to={redirectMap[user.role] || '/login'} />;
   }
 
   return children;
@@ -32,8 +56,21 @@ function App() {
   return (
     <Router>
       <Routes>
-        <Route path="/" element={<MainWebsite />} />
+        {/* Default route redirects to login */}
+        <Route path="/" element={<Navigate to="/login" />} />
+        
+        {/* Login page is the first thing users see */}
         <Route path="/login" element={<LoginPage />} />
+        
+        {/* Main website - only for logged-in customers */}
+        <Route 
+          path="/main" 
+          element={
+            <MainWebsiteRoute>
+              <MainWebsite />
+            </MainWebsiteRoute>
+          } 
+        />
         
         {/* Admin Route */}
         <Route 
@@ -65,8 +102,8 @@ function App() {
           } 
         />
 
-        {/* Default Redirect */}
-        <Route path="*" element={<Navigate to="/" />} />
+        {/* Default redirect for any other route */}
+        <Route path="*" element={<Navigate to="/login" />} />
       </Routes>
     </Router>
   );

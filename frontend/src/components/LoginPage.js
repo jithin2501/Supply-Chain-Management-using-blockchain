@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { Package, Eye, EyeOff, Mail, Lock, User, Building, ArrowRight } from 'lucide-react';
 
@@ -35,15 +36,15 @@ export default function LoginPage() {
       localStorage.setItem('token', data.token);
       localStorage.setItem('user', JSON.stringify(data.user));
 
-      // Updated redirect map for specific supply chain roles
+      // Updated redirect map - customers go to /main (main website)
       const redirectMap = {
         admin: '/admin/dashboard',
         suppliers: '/supplier/dashboard',
         manufacturers: '/manufacturer/dashboard',
-        customers: '/customer/dashboard'
+        customers: '/main' // CHANGED FROM '/' TO '/main'
       };
 
-      window.location.href = redirectMap[data.user.role] || '/dashboard';
+      window.location.href = redirectMap[data.user.role] || '/login';
 
     } catch (err) {
       setError(err.message);
