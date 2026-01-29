@@ -108,6 +108,26 @@ const productSchema = new mongoose.Schema({
 
 const Product = mongoose.model('Product', productSchema);
 
+const transactionSchema = new mongoose.Schema({
+  productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
+  productName: { type: String, required: true },
+  buyerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  buyerName: { type: String, required: true },
+  sellerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  sellerName: { type: String, required: true },
+  quantity: { type: Number, required: true },
+  amount: { type: Number, required: true },
+  txHash: { type: String, required: true, unique: true },
+  status: { 
+    type: String, 
+    enum: ['pending', 'completed', 'failed'], 
+    default: 'pending' 
+  },
+  timestamp: { type: Date, default: Date.now }
+});
+
+const Transaction = mongoose.model('Transaction', transactionSchema);
+
 /* ===================== AUTH MIDDLEWARE ===================== */
 
 const authenticateToken = (req, res, next) => {
@@ -343,6 +363,107 @@ apiRouter.get('/products/available', authenticateToken, async (req, res) => {
     res.status(500).json({ message: 'Error fetching products' });
   }
 });
+
+// MANUFACTURER: Purchase product
+apiRouter.post(
+  '/products/buy',
+  authenticateToken,
+  authorizeRole('manufacturers'),
+  async (req, res) => {
+    try {
+      const { productId, quantity, externalTxHash } = req.body;
+      
+      // Validate required fields
+      if (!productId || !externalTxHash) {
+        return res.status(400).json({ 
+          message: 'Product ID and transaction hash are required' 
+        });
+      }
+
+      // Find product
+      const product = await Product.findById(productId);
+      if (!product) {
+        return res.status(404).json({ message: 'Product not found' });
+      }
+
+      // Check stock
+      if (product.quantity < quantity) {
+        return res.status(400).json({ message: 'Insufficient stock' });
+      }
+
+      // Find buyer
+      const buyer = await User.findById(req.user.id);
+      if (!buyer) {
+        return res.status(404).json({ message: 'Buyer not found' });
+      }
+
+      // Find seller
+      const seller = await User.findById(product.supplierId);
+      if (!seller) {
+        return res.status(404).json({ message: 'Seller not found' });
+      }
+
+      // Update product quantity
+      product.quantity -= quantity;
+      await product.save();
+
+      // Create transaction record
+      const transaction = new Transaction({
+        productId: product._id,
+        productName: product.name,
+        buyerId: buyer._id,
+        buyerName: buyer.name,
+        sellerId: seller._id,
+        sellerName: seller.name,
+        quantity: quantity,
+        amount: product.price * quantity,
+        txHash: externalTxHash,
+        status: 'completed'
+      });
+
+      await transaction.save();
+
+      console.log('✅ Purchase recorded:', {
+        product: product.name,
+        buyer: buyer.email,
+        seller: seller.email,
+        txHash: externalTxHash
+      });
+
+      // Return success response
+      res.status(200).json({
+        message: 'Purchase successful',
+        transaction: transaction
+      });
+
+    } catch (err) {
+      console.error('❌ Purchase error:', err);
+      res.status(500).json({ 
+        message: 'Error processing purchase', 
+        error: err.message 
+      });
+    }
+  }
+);
+
+// MANUFACTURER: Get purchase history
+apiRouter.get(
+  '/manufacturer/purchases',
+  authenticateToken,
+  authorizeRole('manufacturers'),
+  async (req, res) => {
+    try {
+      const purchases = await Transaction.find({ buyerId: req.user.id })
+        .sort({ timestamp: -1 })
+        .populate('productId', 'name image');
+      
+      res.json(purchases);
+    } catch (err) {
+      console.error('❌ Error fetching purchases:', err);
+      res.status(500).json({ message: 'Error fetching purchase history', error: err.message });
+    }
+  }
+);
 
 /* --- Admin Routes --- */
 
