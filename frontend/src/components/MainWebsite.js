@@ -1,30 +1,162 @@
 import React, { useState, useEffect } from 'react';
-import { Package, Shield, TrendingUp, Users, Search, Scan, CheckCircle, ArrowRight, Globe, Lock, Zap, LogOut } from 'lucide-react';
+import { 
+  Package, Shield, TrendingUp, Users, Search, Scan, CheckCircle, 
+  ArrowRight, Globe, Lock, Zap, LogOut, ShoppingBag, Filter, Wallet,
+  ShieldCheck, Database, CheckCircle2, Link as LinkIcon, Clock, AlertCircle,
+  RefreshCw, ShoppingCart, Factory, ChevronRight
+} from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+
+const API_URL = 'http://localhost:5000/api';
+
+// Custom Loader
+function LoaderCircle({ size = 24, className = "" }) {
+  return (
+    <svg 
+      width={size} 
+      height={size} 
+      viewBox="0 0 24 24" 
+      fill="none" 
+      stroke="currentColor" 
+      strokeWidth="2" 
+      strokeLinecap="round" 
+      strokeLinejoin="round" 
+      className={className}
+    >
+      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+    </svg>
+  );
+}
 
 export default function MainWebsite() {
+  const navigate = useNavigate();
   const [productId, setProductId] = useState('');
   const [showScanner, setShowScanner] = useState(false);
   const [user, setUser] = useState(null);
+  const [products, setProducts] = useState([]);
+  const [purchases, setPurchases] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [activeSection, setActiveSection] = useState('home');
+  const [account, setAccount] = useState(null);
+  const [isMetaMaskInstalled, setIsMetaMaskInstalled] = useState(false);
 
-  // Check if user is logged in on component mount
+  // Get token and user data directly from localStorage
+  const token = localStorage.getItem('token');
+  const userData = JSON.parse(localStorage.getItem('user') || '{}');
+
+  // Check if user is logged in and get user data - ONLY ONCE
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    const userData = localStorage.getItem('user');
     if (token && userData) {
       try {
-        setUser(JSON.parse(userData));
+        setUser(userData);
       } catch (err) {
         console.error('Error parsing user data:', err);
-        // Clear invalid user data
         localStorage.removeItem('token');
         localStorage.removeItem('user');
       }
     }
-  }, []);
+  }, []); // Empty dependency array - run only once
+
+  // Check for MetaMask
+  useEffect(() => {
+    if (window.ethereum) {
+      setIsMetaMaskInstalled(true);
+      const savedAccount = localStorage.getItem(`wallet_${userData._id}`);
+      
+      window.ethereum.request({ method: 'eth_accounts' })
+        .then(accounts => {
+          if (accounts.length > 0 && accounts[0] === savedAccount) {
+            setAccount(accounts[0]);
+          }
+        });
+
+      const handleAccountsChanged = (accounts) => {
+        const currentSaved = localStorage.getItem(`wallet_${userData._id}`);
+        if (accounts.length > 0 && accounts[0] === currentSaved) {
+          setAccount(accounts[0]);
+        } else {
+          setAccount(null);
+        }
+      };
+
+      window.ethereum.on('accountsChanged', handleAccountsChanged);
+      
+      return () => {
+        window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
+      };
+    }
+  }, [userData._id]);
+
+  const connectWallet = async () => {
+    if (!window.ethereum) return alert("Please install MetaMask!");
+    try {
+      const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+      const connectedAccount = accounts[0];
+      
+      setAccount(connectedAccount);
+      localStorage.setItem(`wallet_${userData._id}`, connectedAccount);
+      
+    } catch (err) {
+      console.error("Wallet connection failed:", err);
+    }
+  };
+
+  const disconnectWallet = () => {
+    setAccount(null);
+    localStorage.removeItem(`wallet_${userData._id}`);
+  };
+
+  // Fetch available products for customers
+  const fetchAvailableProducts = async () => {
+    if (!token) return;
+    
+    setLoading(true);
+    try {
+      const response = await fetch(`${API_URL}/products/available`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await response.json();
+      // This fetches manufactured products
+      setProducts(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Error loading available products:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch customer purchases
+  const fetchPurchases = async () => {
+    if (!token) return;
+    
+    setLoading(true);
+    try {
+      const response = await fetch(`${API_URL}/customer/purchases`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await response.json();
+      setPurchases(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Error loading purchases:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch data when user role is customers
+  useEffect(() => {
+    if (user && user.role === 'customers' && token) {
+      fetchAvailableProducts();
+      fetchPurchases();
+    } else {
+      // Reset states if not a customer
+      setProducts([]);
+      setPurchases([]);
+    }
+  }, [user]); // Only depend on user, not token
 
   const handleSearch = () => {
     if (productId) {
-      // Redirect to verification page with product ID
       window.location.href = `/verify?id=${productId}`;
     }
   };
@@ -32,7 +164,19 @@ export default function MainWebsite() {
   const handleLogout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
+    if (userData._id) {
+      localStorage.removeItem(`wallet_${userData._id}`);
+    }
     window.location.href = '/login';
+  };
+
+  // Navigation click handlers
+  const scrollToSection = (sectionId) => {
+    setActiveSection(sectionId);
+    const element = document.getElementById(sectionId);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth' });
+    }
   };
 
   return (
@@ -46,16 +190,58 @@ export default function MainWebsite() {
               <span className="text-2xl font-bold text-gray-900">ChainTrack</span>
             </div>
             <div className="hidden md:flex space-x-8">
-              <a href="#home" className="text-gray-700 hover:text-blue-600 font-medium transition">Home</a>
-              <a href="#features" className="text-gray-700 hover:text-blue-600 font-medium transition">Features</a>
-              <a href="#how-it-works" className="text-gray-700 hover:text-blue-600 font-medium transition">How It Works</a>
-              <a href="#verify" className="text-gray-700 hover:text-blue-600 font-medium transition">Verify Product</a>
+              <button
+                onClick={() => scrollToSection('home')}
+                className={`font-medium transition ${activeSection === 'home' ? 'text-blue-600' : 'text-gray-700 hover:text-blue-600'}`}
+              >
+                Home
+              </button>
+              {user?.role === 'customers' && (
+                <button
+                  onClick={() => navigate('/customer/products')}
+                  className={`font-medium transition ${activeSection === 'products' ? 'text-blue-600' : 'text-gray-700 hover:text-blue-600'}`}
+                >
+                  Products
+                </button>
+              )}
+              <button
+                onClick={() => scrollToSection('features')}
+                className={`font-medium transition ${activeSection === 'features' ? 'text-blue-600' : 'text-gray-700 hover:text-blue-600'}`}
+              >
+                Features
+              </button>
+              <button
+                onClick={() => scrollToSection('how-it-works')}
+                className={`font-medium transition ${activeSection === 'how-it-works' ? 'text-blue-600' : 'text-gray-700 hover:text-blue-600'}`}
+              >
+                How It Works
+              </button>
+              <button
+                onClick={() => scrollToSection('verify')}
+                className={`font-medium transition ${activeSection === 'verify' ? 'text-blue-600' : 'text-gray-700 hover:text-blue-600'}`}
+              >
+                Verify Product
+              </button>
             </div>
             {user ? (
               <div className="flex items-center space-x-4">
+                {user.role === 'customers' && account && (
+                  <div className="flex items-center space-x-2">
+                    <div className="text-right hidden sm:block">
+                      <div className="text-xs text-gray-500">Wallet Connected</div>
+                      <div className="text-[10px] font-mono text-green-600 truncate">{account.substring(0, 10)}...</div>
+                    </div>
+                    <button
+                      onClick={disconnectWallet}
+                      className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
+                    >
+                      <LogOut size={18} />
+                    </button>
+                  </div>
+                )}
                 <div className="text-right hidden sm:block">
                   <div className="font-semibold text-gray-900">{user.name}</div>
-                  <div className="text-sm text-gray-600">{user.company}</div>
+                  <div className="text-sm text-gray-600 capitalize">{user.role}</div>
                 </div>
                 <button
                   onClick={handleLogout}
@@ -86,12 +272,27 @@ export default function MainWebsite() {
                 Blockchain-powered transparency from origin to consumer. Track, verify, and trust every product in real-time.
               </p>
               <div className="flex flex-wrap gap-4">
-                <a href="#verify" className="px-8 py-4 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition flex items-center">
-                  Verify Product <ArrowRight className="ml-2" size={20} />
-                </a>
-                <a href="#how-it-works" className="px-8 py-4 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:border-blue-600 hover:text-blue-600 transition">
+                {user?.role === 'customers' ? (
+                  <button
+                    onClick={() => navigate('/customer/products')}
+                    className="px-8 py-4 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition flex items-center"
+                  >
+                    Browse Products <ArrowRight className="ml-2" size={20} />
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => scrollToSection('how-it-works')}
+                    className="px-8 py-4 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition flex items-center"
+                  >
+                    Browse Products <ArrowRight className="ml-2" size={20} />
+                  </button>
+                )}
+                <button
+                  onClick={() => scrollToSection('how-it-works')}
+                  className="px-8 py-4 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:border-blue-600 hover:text-blue-600 transition"
+                >
                   Learn More
-                </a>
+                </button>
               </div>
               <div className="mt-8 flex items-center space-x-8">
                 <div>
@@ -140,6 +341,176 @@ export default function MainWebsite() {
           </div>
         </div>
       </section>
+
+      {/* Products CTA Section - UPDATED */}
+      {user?.role === 'customers' && (
+        <section id="products" className="py-20 px-6 bg-white">
+          <div className="max-w-7xl mx-auto">
+            <div className="text-center mb-12">
+              <h2 className="text-4xl font-bold text-gray-900 mb-4">Shop Blockchain-Verified Products</h2>
+              <p className="text-xl text-gray-600">Purchase products with complete supply chain transparency</p>
+            </div>
+
+            {/* Products Preview Grid */}
+            {loading ? (
+              <div className="flex items-center justify-center h-64">
+                <LoaderCircle className="animate-spin text-blue-600" size={48} />
+              </div>
+            ) : products.length > 0 ? (
+              <div className="mb-12">
+                <h3 className="text-2xl font-bold text-gray-900 mb-6">Featured Products</h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {products.slice(0, 3).map(product => (
+                    <div key={product._id} className="bg-white rounded-2xl shadow-sm border overflow-hidden hover:shadow-lg transition">
+                      <div className="p-6">
+                        <div className="flex items-center justify-between mb-4">
+                          <Package className="text-blue-600" size={32} />
+                          <span className={`px-3 py-1 rounded-full text-xs font-bold ${product.quantity > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                            {product.quantity > 0 ? `${product.quantity} in stock` : 'Sold Out'}
+                          </span>
+                        </div>
+                        <h4 className="text-xl font-bold text-gray-900 mb-2">{product.name}</h4>
+                        <p className="text-sm text-gray-600 mb-4 line-clamp-2">{product.description}</p>
+                        <div className="mb-4">
+                          <p className="text-[10px] font-bold text-gray-400 uppercase">Manufacturer</p>
+                          <p className="text-sm font-semibold">{product.company || product.manufacturerName}</p>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-[10px] font-bold text-gray-400 uppercase">Price</p>
+                            <p className="text-2xl font-black text-gray-900">${product.price}</p>
+                          </div>
+                          <button 
+                            onClick={() => navigate('/customer/products')}
+                            className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition flex items-center space-x-2"
+                          >
+                            <span>View Details</span>
+                            <ArrowRight size={18} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="mb-12 bg-white p-12 rounded-2xl border-2 border-dashed border-gray-200 text-center">
+                <Factory className="mx-auto text-gray-300 mb-4" size={64} />
+                <p className="text-gray-600">No products available yet. Manufacturers are creating blockchain-verified products.</p>
+              </div>
+            )}
+
+            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-3xl p-8 md:p-12">
+              <div className="grid md:grid-cols-2 gap-8 items-center">
+                <div>
+                  <h3 className="text-3xl font-bold text-gray-900 mb-4">Ready to Shop?</h3>
+                  <p className="text-gray-600 mb-6">
+                    Browse our collection of blockchain-verified products. Each product comes with a complete,
+                    immutable history from manufacturer to shelf.
+                  </p>
+                  <div className="space-y-4">
+                    <div className="flex items-start space-x-3">
+                      <CheckCircle className="text-green-500 mt-0.5" size={20} />
+                      <div>
+                        <p className="font-medium text-gray-900">Full Transparency</p>
+                        <p className="text-sm text-gray-600">View complete supply chain history</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start space-x-3">
+                      <CheckCircle className="text-green-500 mt-0.5" size={20} />
+                      <div>
+                        <p className="font-medium text-gray-900">Blockchain Verified</p>
+                        <p className="text-sm text-gray-600">Every transaction recorded on-chain</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start space-x-3">
+                      <CheckCircle className="text-green-500 mt-0.5" size={20} />
+                      <div>
+                        <p className="font-medium text-gray-900">Secure Payments</p>
+                        <p className="text-sm text-gray-600">Pay with MetaMask for added security</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="text-center">
+                  <div className="inline-block bg-white p-8 rounded-2xl shadow-lg">
+                    <ShoppingBag className="mx-auto text-blue-600 mb-4" size={64} />
+                    <h4 className="text-2xl font-bold text-gray-900 mb-2">Marketplace Access</h4>
+                    <p className="text-gray-600 mb-6">Connect your wallet to start shopping</p>
+                    <button
+                      onClick={() => navigate('/customer/products')}
+                      className="w-full px-8 py-4 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition flex items-center justify-center space-x-2"
+                    >
+                      <span>Go to Marketplace</span>
+                      <ChevronRight size={20} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Recent Purchase History */}
+            {purchases.length > 0 && (
+              <div className="mt-16">
+                <h3 className="text-2xl font-bold text-gray-900 mb-6">Your Recent Purchases</h3>
+                <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left">
+                      <thead className="bg-gray-50 border-b border-gray-100">
+                        <tr>
+                          <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Product</th>
+                          <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Manufacturer</th>
+                          <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Amount</th>
+                          <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest text-right">Date</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-50">
+                        {purchases.slice(0, 3).map(purchase => (
+                          <tr key={purchase._id} className="hover:bg-blue-50/30 transition">
+                            <td className="px-6 py-4">
+                              <div className="font-bold text-gray-900">{purchase.productName}</div>
+                              {purchase.txHash && (
+                                <a 
+                                  href={`https://etherscan.io/tx/${purchase.txHash}`} 
+                                  target="_blank" 
+                                  rel="noreferrer"
+                                  className="flex items-center space-x-1 text-blue-600 hover:underline text-xs"
+                                >
+                                  <LinkIcon size={10} />
+                                  <span>View on Blockchain</span>
+                                </a>
+                              )}
+                            </td>
+                            <td className="px-6 py-4 text-sm text-gray-600">{purchase.sellerName}</td>
+                            <td className="px-6 py-4 font-bold text-gray-900">${purchase.amount}</td>
+                            <td className="px-6 py-4 text-right">
+                              <div className="flex items-center justify-end text-xs text-gray-400">
+                                <Clock size={12} className="mr-1" />
+                                {new Date(purchase.timestamp).toLocaleDateString()}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {purchases.length > 3 && (
+                      <div className="p-4 text-center border-t border-gray-100">
+                        <button
+                          onClick={() => navigate('/customer/products')}
+                          className="text-blue-600 hover:text-blue-700 font-medium flex items-center justify-center space-x-1 mx-auto"
+                        >
+                          <span>View all {purchases.length} purchases</span>
+                          <ChevronRight size={16} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* Features Section */}
       <section id="features" className="py-20 px-6 bg-white">
@@ -301,15 +672,43 @@ export default function MainWebsite() {
           <h2 className="text-4xl font-bold text-gray-900 mb-4">Ready to Transform Your Supply Chain?</h2>
           <p className="text-xl text-gray-600 mb-8">Join hundreds of companies already using ChainTrack</p>
           <div className="flex flex-wrap gap-4 justify-center">
-            <a href="#verify" className="px-8 py-4 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition">
-              Verify Product
-            </a>
-            <button
-              onClick={handleLogout}
-              className="px-8 py-4 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:border-blue-600 hover:text-blue-600 transition"
-            >
-              Switch Account
-            </button>
+            {user ? (
+              <>
+                {user.role === 'customers' ? (
+                  <button
+                    onClick={() => navigate('/customer/products')}
+                    className="px-8 py-4 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition"
+                  >
+                    Browse Products
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleLogout}
+                    className="px-8 py-4 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition"
+                  >
+                    Go to Dashboard
+                  </button>
+                )}
+                <button
+                  onClick={handleLogout}
+                  className="px-8 py-4 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:border-blue-600 hover:text-blue-600 transition"
+                >
+                  Switch Account
+                </button>
+              </>
+            ) : (
+              <>
+                <a href="/login" className="px-8 py-4 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition">
+                  Get Started
+                </a>
+                <button
+                  onClick={() => scrollToSection('features')}
+                  className="px-8 py-4 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:border-blue-600 hover:text-blue-600 transition"
+                >
+                  Learn More
+                </button>
+              </>
+            )}
           </div>
         </div>
       </section>
@@ -328,9 +727,9 @@ export default function MainWebsite() {
             <div>
               <h3 className="font-bold mb-4">Product</h3>
               <ul className="space-y-2 text-gray-400">
-                <li><a href="#features" className="hover:text-white">Features</a></li>
-                <li><a href="#how-it-works" className="hover:text-white">How It Works</a></li>
-                <li><a href="#verify" className="hover:text-white">Verify Product</a></li>
+                <li><button onClick={() => scrollToSection('features')} className="hover:text-white">Features</button></li>
+                <li><button onClick={() => scrollToSection('how-it-works')} className="hover:text-white">How It Works</button></li>
+                <li><button onClick={() => scrollToSection('verify')} className="hover:text-white">Verify Product</button></li>
               </ul>
             </div>
             <div>
