@@ -1,4 +1,3 @@
-
 const express = require('express');
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
@@ -978,8 +977,15 @@ apiRouter.get(
   authorizeRole('customers'),
   async (req, res) => {
     try {
+      console.log(`📋 Fetching purchases for customer: ${req.user.email} (ID: ${req.user.id})`);
+      
       const purchases = await Transaction.find({ buyerId: req.user.id })
         .sort({ timestamp: -1 });
+      
+      console.log(`✅ Found ${purchases.length} purchases for customer ${req.user.email}`);
+      purchases.forEach(p => {
+        console.log(`  - Purchase ID: ${p._id}, Product: ${p.productName}, Amount: $${p.amount}`);
+      });
       
       res.json(purchases);
     } catch (err) {
@@ -991,6 +997,69 @@ apiRouter.get(
     }
   }
 ); 
+
+// DELETE a purchase from customer history
+apiRouter.delete(
+  '/customer/purchases/:purchaseId',
+  authenticateToken,
+  authorizeRole('customers'),
+  async (req, res) => {
+    try {
+      const { purchaseId } = req.params;
+      
+      console.log(`🗑️ Delete request for purchase: ${purchaseId} by user ${req.user.email} (ID: ${req.user.id})`);
+
+      // Validate ObjectId format
+      if (!mongoose.Types.ObjectId.isValid(purchaseId)) {
+        console.log(`❌ Invalid ObjectId format: ${purchaseId}`);
+        return res.status(400).json({ 
+          message: 'Invalid purchase ID format' 
+        });
+      }
+
+      // Find the purchase and verify it belongs to this customer
+      const purchase = await Transaction.findOne({
+        _id: purchaseId,
+        buyerId: req.user.id
+      });
+
+      console.log(`🔍 Purchase found:`, purchase ? 'Yes' : 'No');
+      
+      if (!purchase) {
+        // Check if purchase exists at all
+        const anyPurchase = await Transaction.findById(purchaseId);
+        if (!anyPurchase) {
+          console.log(`❌ Purchase ${purchaseId} does not exist`);
+          return res.status(404).json({ 
+            message: 'Purchase not found' 
+          });
+        } else {
+          console.log(`❌ Purchase ${purchaseId} belongs to user ${anyPurchase.buyerId}, not ${req.user.id}`);
+          return res.status(403).json({ 
+            message: 'You do not have permission to delete this purchase' 
+          });
+        }
+      }
+
+      // Delete the purchase
+      await Transaction.deleteOne({ _id: purchaseId });
+
+      console.log(`✅ Purchase deleted: ${purchaseId} by customer ${req.user.email}`);
+
+      res.json({ 
+        message: 'Purchase deleted successfully',
+        purchaseId 
+      });
+
+    } catch (err) {
+      console.error('❌ Error deleting purchase:', err);
+      res.status(500).json({ 
+        message: 'Error deleting purchase', 
+        error: err.message 
+      });
+    }
+  }
+);
 
 /* --- Admin Routes --- */
 apiRouter.get(

@@ -3,7 +3,7 @@ import {
   ShoppingBag, Package, Wallet, LogOut, CheckCircle2, 
   ArrowRight, Link as LinkIcon, Clock, AlertCircle, RefreshCw,
   ShieldCheck, Database, CheckCircle, Search, Filter,
-  ShoppingCart, Factory, ArrowLeft, Users, Tag, Eye, X
+  ShoppingCart, Factory, ArrowLeft, Users, Tag, Eye, X, Trash2
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -315,6 +315,32 @@ export default function CustomerProductsPage() {
     }
   }, [token]);
 
+  // Delete a purchase from history
+  const handleDeletePurchase = async (purchaseId) => {
+    if (!window.confirm("Are you sure you want to delete this purchase from your history?")) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_URL}/customer/purchases/${purchaseId}`, {
+        method: "DELETE",
+        headers: { "Authorization": `Bearer ${token}` }
+      });
+
+      if (response.ok) {
+        // Remove from local state
+        setPurchases(purchases.filter(p => p._id !== purchaseId));
+        alert("Purchase deleted successfully");
+      } else {
+        const data = await response.json();
+        alert(data.message || "Failed to delete purchase");
+      }
+    } catch (err) {
+      console.error("Error deleting purchase:", err);
+      alert("Error deleting purchase");
+    }
+  };
+
   useEffect(() => {
     fetchProducts();
     fetchPurchases();
@@ -618,88 +644,50 @@ export default function CustomerProductsPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
             {filteredProducts.map(product => (
               <div key={product._id} className="bg-white rounded-2xl shadow-lg overflow-hidden hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-1">
-                {/* Product Image with View Button */}
+                {/* Product Image */}
                 <div className="relative h-56 overflow-hidden bg-gradient-to-br from-gray-100 to-gray-200">
                   {product.image ? (
-                    <>
-                      <img 
-                        src={product.image} 
-                        alt={product.name}
-                        className="w-full h-full object-cover"
-                        onError={(e) => {
-                          e.target.onerror = null;
-                          e.target.src = 'https://via.placeholder.com/400x300?text=Image+Not+Available';
-                        }}
-                      />
-                      <button
-                        onClick={() => setViewImage(product.image)}
-                        className="absolute top-3 left-3 p-2 bg-black/50 text-white rounded-lg hover:bg-black/70 transition"
-                        title="View Full Image"
-                      >
-                        <Eye size={16} />
-                      </button>
-                    </>
+                    <img 
+                      src={product.image} 
+                      alt={product.name}
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        e.target.onerror = null;
+                        e.target.src = 'https://via.placeholder.com/400x300?text=Image+Not+Available';
+                      }}
+                    />
                   ) : (
                     <div className="w-full h-full flex flex-col items-center justify-center">
                       <Package className="text-gray-400 mb-2" size={48} />
                       <span className="text-gray-500 text-sm">No image available</span>
                     </div>
                   )}
-                  {/* Stock Badge */}
-                  <div className="absolute top-4 right-4">
-                    <span className={`px-3 py-1.5 rounded-full text-xs font-bold shadow-lg ${
-                      product.quantity > 0 
-                        ? 'bg-green-500 text-white' 
-                        : 'bg-red-500 text-white'
-                    }`}>
-                      {product.quantity > 0 ? `${product.quantity} in stock` : 'Out of stock'}
-                    </span>
-                  </div>
                 </div>
 
-                {/* Product Details */}
+                {/* Product Details - Simplified */}
                 <div className="p-6">
                   {/* Product Name */}
-                  <h4 className="text-2xl font-bold text-gray-900 mb-2 line-clamp-1">
+                  <h4 className="text-xl font-bold text-gray-900 mb-3">
                     {product.name}
                   </h4>
 
-                  {/* Company Name */}
-                  <p className="text-sm text-gray-600 font-medium mb-4">
-                    {product.company || product.manufacturerName || "Unknown Company"}
-                  </p>
-
-                  {/* Description */}
-                  {product.description && (
-                    <p className="text-sm text-gray-600 mb-4 line-clamp-2">
-                      {product.description}
-                    </p>
-                  )}
-
-                  {/* Manufacturer Section */}
-                  <div className="mb-4 pb-4 border-b border-gray-100">
-                    <div className="flex items-center space-x-2 mb-1">
-                      <Users size={14} className="text-gray-400" />
-                      <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">MANUFACTURER</span>
-                    </div>
-                    <p className="text-sm font-semibold text-gray-900">
+                  {/* Manufacturer Name */}
+                  <div className="mb-4 pb-3 border-b border-gray-100">
+                    <p className="text-sm text-gray-500 mb-1">Manufacturer</p>
+                    <p className="text-base font-semibold text-gray-900">
                       {product.manufacturerName || product.company || "Manufacturer"}
                     </p>
                   </div>
 
-                  {/* Price and Stock Section */}
-                  <div className="flex items-center justify-between mb-6">
+                  {/* Price and Stock - Side by Side */}
+                  <div className="flex items-center justify-between mb-5">
                     <div>
-                      <div className="flex items-center space-x-2 mb-1">
-                        <Tag size={14} className="text-gray-400" />
-                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">PRICE</span>
-                      </div>
-                      <p className="text-3xl font-black text-gray-900">${product.price}</p>
+                      <p className="text-xs text-gray-500 mb-1">Price</p>
+                      <p className="text-2xl font-bold text-gray-900">${product.price}</p>
                     </div>
-                    
                     <div className="text-right">
-                      <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">IN STOCK</div>
-                      <p className={`text-2xl font-black ${product.quantity > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      <p className="text-xs text-gray-500 mb-1">In Stock</p>
+                      <p className={`text-xl font-bold ${product.quantity > 0 ? 'text-green-600' : 'text-red-600'}`}>
                         {product.quantity}
                       </p>
                     </div>
@@ -709,10 +697,10 @@ export default function CustomerProductsPage() {
                   <button 
                     onClick={() => handleBuyProduct(product)}
                     disabled={!account || product.quantity === 0}
-                    className={`w-full py-3.5 rounded-xl font-bold flex items-center justify-center space-x-2 transition-all shadow-md ${
+                    className={`w-full py-3 rounded-xl font-bold flex items-center justify-center space-x-2 transition-all ${
                       !account || product.quantity === 0 
                         ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
-                        : 'bg-blue-600 text-white hover:bg-blue-700 hover:shadow-xl'
+                        : 'bg-blue-600 text-white hover:bg-blue-700'
                     }`}
                   >
                     <span>{!account ? 'Connect Wallet' : product.quantity === 0 ? 'Out of Stock' : 'Buy Now'}</span>
@@ -756,6 +744,7 @@ export default function CustomerProductsPage() {
                       <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Manufacturer</th>
                       <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Amount</th>
                       <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest text-right">Date</th>
+                      <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest text-center">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
@@ -782,6 +771,15 @@ export default function CustomerProductsPage() {
                             <Clock size={12} className="mr-1" />
                             {new Date(purchase.timestamp).toLocaleDateString()}
                           </div>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <button
+                            onClick={() => handleDeletePurchase(purchase._id)}
+                            className="p-2 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg transition"
+                            title="Delete purchase"
+                          >
+                            <Trash2 size={16} />
+                          </button>
                         </td>
                       </tr>
                     ))}
