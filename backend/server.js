@@ -97,9 +97,17 @@ const User = mongoose.model('User', userSchema);
 
 const productSchema = new mongoose.Schema({
   name: { type: String, required: true },
+  description: { type: String, default: '' },
   quantity: { type: Number, required: true },
-  price: { type: Number, required: true },
+  price: { type: Number, required: true }, // Price in INR
   image: { type: String, required: true },
+  
+  // Google Map Location
+  location: {
+    lat: { type: Number, required: true },
+    lng: { type: Number, required: true },
+    address: { type: String, required: true }
+  },
 
   // supplier reference
   supplierId: {
@@ -132,8 +140,16 @@ const purchasedMaterialSchema = new mongoose.Schema({
   },
   supplierName: { type: String, required: true },
   quantity: { type: Number, required: true },
-  price: { type: Number, required: true },
+  price: { type: Number, required: true }, // Price per unit in INR
   image: { type: String, required: true },
+  
+  // Location from original product
+  location: {
+    lat: { type: Number, required: true },
+    lng: { type: Number, required: true },
+    address: { type: String, required: true }
+  },
+  
   txHash: { type: String, required: true, unique: true },
   status: { 
     type: String, 
@@ -153,7 +169,7 @@ const transactionSchema = new mongoose.Schema({
   sellerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   sellerName: { type: String, required: true },
   quantity: { type: Number, required: true },
-  amount: { type: Number, required: true },
+  amount: { type: Number, required: true }, // Amount in INR
   txHash: { type: String, required: true, unique: true },
   status: { 
     type: String, 
@@ -168,9 +184,17 @@ const Transaction = mongoose.model('Transaction', transactionSchema);
 const manufacturedProductSchema = new mongoose.Schema({
   name: { type: String, required: true },
   description: { type: String, required: true },
-  price: { type: Number, required: true },
+  price: { type: Number, required: true }, // Price in INR
   quantity: { type: Number, required: true },
   image: { type: String, required: true },
+  
+  // Location from original material
+  location: {
+    lat: { type: Number, required: true },
+    lng: { type: Number, required: true },
+    address: { type: String, required: true }
+  },
+  
   materialId: { 
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'Transaction',
@@ -227,7 +251,6 @@ const authorizeRole = (...roles) => (req, res, next) => {
 };
 
 /* ===================== API ROUTES ===================== */
-// Create a router for all /api endpoints to ensure consistent routing
 const apiRouter = express.Router();
 
 /* --- Auth Routes --- */
@@ -298,7 +321,7 @@ apiRouter.post('/auth/login', async (req, res) => {
 
 /* --- Product Routes --- */
 
-// SUPPLIER: Add product
+// SUPPLIER: Add product with location
 apiRouter.post(
   '/products',
   authenticateToken,
@@ -306,7 +329,7 @@ apiRouter.post(
   upload.single('image'),
   async (req, res) => {
     try {
-      const { name, quantity, price } = req.body;
+      const { name, quantity, price, description, lat, lng, address } = req.body;
       const user = await User.findById(req.user.id);
 
       console.log('📦 Adding product:', { name, quantity, price, supplierId: user._id });
@@ -316,14 +339,24 @@ apiRouter.post(
         return res.status(400).json({ message: 'Image is required' });
       }
 
-      // Log the Cloudinary image URL
+      // Validate location data
+      if (!lat || !lng || !address) {
+        return res.status(400).json({ message: 'Location information is required' });
+      }
+
       console.log('📸 Image uploaded to Cloudinary:', req.file.path);
 
       const product = new Product({
         name,
-        quantity,
-        price,
-        image: req.file.path, // This should be the Cloudinary URL
+        description: description || '',
+        quantity: parseInt(quantity),
+        price: parseFloat(price), // Store in INR
+        image: req.file.path,
+        location: {
+          lat: parseFloat(lat),
+          lng: parseFloat(lng),
+          address: address
+        },
         supplierId: user._id,
         supplierName: user.name,
         company: user.company
@@ -369,10 +402,24 @@ apiRouter.put(
   upload.single('image'),
   async (req, res) => {
     try {
-      const { name, quantity, price } = req.body;
-      const updateData = { name, quantity, price };
+      const { name, quantity, price, description, lat, lng, address } = req.body;
+      const updateData = { 
+        name, 
+        quantity: parseInt(quantity), 
+        price: parseFloat(price),
+        description: description || ''
+      };
 
       console.log('✏️ Updating product:', req.params.id);
+
+      // Add location if provided
+      if (lat && lng && address) {
+        updateData.location = {
+          lat: parseFloat(lat),
+          lng: parseFloat(lng),
+          address: address
+        };
+      }
 
       if (req.file) {
         updateData.image = req.file.path;
@@ -426,7 +473,6 @@ apiRouter.delete(
 );
 
 // MANUFACTURER: Get all available materials (raw materials from suppliers)
-// FIXED VERSION: Filter out materials the manufacturer has already purchased
 apiRouter.get(
   '/products/available',
   authenticateToken,
@@ -453,18 +499,12 @@ apiRouter.get(
         
         console.log(`✅ Manufacturer has ${manufacturerTransactions.length} completed transactions`);
         
-        // Log all transactions for debugging
-        manufacturerTransactions.forEach((tx, index) => {
-          console.log(`   Transaction ${index + 1}: Product ID: ${tx.productId}, Name: "${tx.productName}"`);
-        });
-        
         // Create a Set of product IDs that the manufacturer has already purchased
         const purchasedProductIds = new Set();
         manufacturerTransactions.forEach(transaction => {
           if (transaction.productId) {
             const productIdStr = transaction.productId.toString();
             purchasedProductIds.add(productIdStr);
-            console.log(`   Added to purchased set: ${productIdStr}`);
           }
         });
         
@@ -472,34 +512,14 @@ apiRouter.get(
         
         console.log(`⚡ [STEP 3] Filtering products...`);
         // Filter out products that the manufacturer has already purchased
-        const filteredProducts = [];
-        const removedProducts = [];
-        
-        allProducts.forEach(product => {
+        const filteredProducts = allProducts.filter(product => {
           const productIdStr = product._id.toString();
-          if (purchasedProductIds.has(productIdStr)) {
-            removedProducts.push({
-              id: productIdStr,
-              name: product.name,
-              reason: 'Already purchased'
-            });
-          } else {
-            filteredProducts.push(product);
-          }
+          return !purchasedProductIds.has(productIdStr);
         });
         
         console.log(`✅ FILTERING RESULTS:`);
         console.log(`   Total products in system: ${allProducts.length}`);
-        console.log(`   Products removed (already purchased): ${removedProducts.length}`);
         console.log(`   Products available for purchase: ${filteredProducts.length}`);
-        
-        if (removedProducts.length > 0) {
-          console.log(`   Removed products:`);
-          removedProducts.forEach(p => console.log(`     - ${p.name} (ID: ${p.id})`));
-        }
-        
-        console.log(`   Available products:`);
-        filteredProducts.forEach(p => console.log(`     - ${p.name} (ID: ${p._id})`));
         
         return res.json(filteredProducts);
       }
@@ -511,11 +531,6 @@ apiRouter.get(
           quantity: { $gt: 0 }
         }).sort({ createdAt: -1 });
         console.log(`✅ Customer ${req.user.email}: ${products.length} available products`);
-        
-        // Log image URLs for debugging
-        products.forEach(p => {
-          console.log(`   Product: ${p.name}, Image: ${p.image}`);
-        });
         
         return res.json(products);
       }
@@ -529,7 +544,7 @@ apiRouter.get(
   }
 );
 
-// MANUFACTURER: Purchase product (raw material from supplier)
+// MANUFACTURER: Purchase product (raw material from supplier) with quantity selection
 apiRouter.post(
   '/products/buy-raw',
   authenticateToken,
@@ -544,9 +559,16 @@ apiRouter.post(
       console.log(`   TX Hash: ${externalTxHash}`);
       
       // Validate required fields
-      if (!productId || !externalTxHash) {
+      if (!productId || !externalTxHash || !quantity) {
         return res.status(400).json({ 
-          message: 'Product ID and transaction hash are required' 
+          message: 'Product ID, quantity and transaction hash are required' 
+        });
+      }
+
+      const quantityToBuy = parseInt(quantity);
+      if (quantityToBuy <= 0) {
+        return res.status(400).json({ 
+          message: 'Quantity must be greater than 0' 
         });
       }
 
@@ -558,12 +580,14 @@ apiRouter.post(
       }
 
       console.log(`✅ Found product: "${product.name}" (ID: ${product._id})`);
-      console.log(`📸 Product image URL: ${product.image}`);
+      console.log(`📊 Available quantity: ${product.quantity}`);
       
       // Check stock
-      if (product.quantity < quantity) {
-        console.log(`❌ Insufficient stock: ${product.quantity} available, ${quantity} requested`);
-        return res.status(400).json({ message: 'Insufficient stock' });
+      if (product.quantity < quantityToBuy) {
+        console.log(`❌ Insufficient stock: ${product.quantity} available, ${quantityToBuy} requested`);
+        return res.status(400).json({ 
+          message: `Insufficient stock. Only ${product.quantity} units available` 
+        });
       }
 
       // Check if manufacturer has already purchased this product
@@ -598,10 +622,14 @@ apiRouter.post(
 
       console.log(`✅ Buyer: ${buyer.email}, Seller: ${seller.email}`);
       
-      // Update product quantity
-      console.log(`📊 Updating product quantity: ${product.quantity} -> ${product.quantity - quantity}`);
-      product.quantity -= quantity;
+      // Update product quantity (reduce by purchased quantity)
+      const originalQuantity = product.quantity;
+      product.quantity -= quantityToBuy;
       await product.save();
+      console.log(`📊 Updated product quantity: ${originalQuantity} -> ${product.quantity}`);
+
+      // Calculate total amount in INR
+      const totalAmount = product.price * quantityToBuy;
 
       // Create transaction record
       const transaction = new Transaction({
@@ -611,8 +639,8 @@ apiRouter.post(
         buyerName: buyer.name,
         sellerId: seller._id,
         sellerName: seller.name,
-        quantity: quantity,
-        amount: product.price * quantity,
+        quantity: quantityToBuy,
+        amount: totalAmount,
         txHash: externalTxHash,
         status: 'completed'
       });
@@ -629,22 +657,24 @@ apiRouter.post(
         manufacturerName: buyer.name,
         supplierId: seller._id,
         supplierName: seller.name,
-        quantity: quantity,
-        price: product.price,
-        image: product.image, // Copy the image from original product
+        quantity: quantityToBuy,
+        price: product.price, // Price per unit in INR
+        image: product.image,
+        location: product.location, // Copy location from original product
         txHash: externalTxHash,
         status: 'available',
         purchasedAt: new Date()
       });
-      console.log(`✅ PurchasedMaterial record created with image: ${product.image}`);
+      console.log(`✅ PurchasedMaterial record created`);
 
-      // Auto-create manufactured product WITH THE SAME IMAGE
+      // Auto-create manufactured product with the same image and location
       const manufacturedProduct = await ManufacturedProduct.create({
-        name: product.name, // Use the exact same name, no "Auto-created" text
-        image: product.image, // Use the exact same image from original product
-        description: `Manufactured from high-quality ${product.name}`,
-        price: product.price * 2,
-        quantity: quantity,
+        name: product.name,
+        image: product.image,
+        description: product.description || `Manufactured from high-quality ${product.name}`,
+        price: product.price * 2, // Double the price for manufactured product
+        quantity: quantityToBuy,
+        location: product.location, // Copy location from original product
         materialId: transaction._id,
         manufacturerId: buyer._id,
         manufacturerName: buyer.name,
@@ -652,21 +682,25 @@ apiRouter.post(
         txHash: externalTxHash,
         status: 'active'
       });
-      console.log(`✅ ManufacturedProduct auto-created with image: ${manufacturedProduct.image}`);
+      console.log(`✅ ManufacturedProduct auto-created`);
 
       console.log('🎉 PURCHASE COMPLETE:', {
         product: product.name,
-        productId: product._id,
-        image: product.image,
+        quantity: quantityToBuy,
+        pricePerUnit: product.price,
+        totalAmount: totalAmount,
         buyer: buyer.email,
         seller: seller.email,
-        txHash: externalTxHash
+        txHash: externalTxHash,
+        remainingStock: product.quantity
       });
 
       // Return success response
       res.status(200).json({
         message: 'Purchase successful',
         transaction: transaction,
+        purchasedQuantity: quantityToBuy,
+        remainingStock: product.quantity,
         productId: product._id
       });
 
@@ -697,9 +731,6 @@ apiRouter.get(
       }).sort({ purchasedAt: -1 });
       
       console.log(`✅ Found ${purchasedMaterials.length} purchased materials for supplier ${req.user.email}`);
-      purchasedMaterials.forEach(m => {
-        console.log(`  - Material: ${m.productName}, Buyer: ${m.manufacturerName}, Qty: ${m.quantity}, Status: ${m.status}`);
-      });
       
       res.json(purchasedMaterials);
     } catch (err) {
@@ -724,13 +755,10 @@ apiRouter.get(
       // Find all transactions where this supplier is the seller
       const receipts = await Transaction.find({ 
         sellerId: req.user.id,
-        status: 'completed' // Only show completed transactions
+        status: 'completed'
       }).sort({ timestamp: -1 });
       
       console.log(`✅ Found ${receipts.length} payment receipts for supplier ${req.user.email}`);
-      receipts.forEach(r => {
-        console.log(`  - Receipt ID: ${r._id}, Product: ${r.productName}, Buyer: ${r.buyerName}, Amount: $${r.amount}`);
-      });
       
       res.json(receipts);
     } catch (err) {
@@ -768,22 +796,10 @@ apiRouter.delete(
         sellerId: req.user.id
       });
 
-      console.log(`🔍 Receipt found:`, receipt ? 'Yes' : 'No');
-      
       if (!receipt) {
-        // Check if receipt exists at all
-        const anyReceipt = await Transaction.findById(receiptId);
-        if (!anyReceipt) {
-          console.log(`❌ Receipt ${receiptId} does not exist`);
-          return res.status(404).json({ 
-            message: 'Receipt not found' 
-          });
-        } else {
-          console.log(`❌ Receipt ${receiptId} belongs to seller ${anyReceipt.sellerId}, not ${req.user.id}`);
-          return res.status(403).json({ 
-            message: 'You do not have permission to delete this receipt' 
-          });
-        }
+        return res.status(404).json({ 
+          message: 'Receipt not found or unauthorized' 
+        });
       }
 
       // Delete the receipt
@@ -841,9 +857,6 @@ apiRouter.get(
         .populate('productId', 'name image');
       
       console.log(`📜 Purchase history for ${req.user.email}: ${purchases.length} transactions`);
-      purchases.forEach(p => {
-        console.log(`   - ${p.productName} (ID: ${p.productId}) - ${p.timestamp}`);
-      });
       
       res.json(purchases);
     } catch (err) {
@@ -892,7 +905,8 @@ apiRouter.post(
         description,
         price: parseFloat(price),
         quantity: parseInt(quantity),
-        image: material.image, // Use the image from purchased material
+        image: material.image,
+        location: material.location, // Copy location from purchased material
         materialId: material._id,
         manufacturerId: manufacturer._id,
         manufacturerName: manufacturer.name,
@@ -905,7 +919,6 @@ apiRouter.post(
 
       console.log('✅ Product created:', {
         name,
-        image: material.image,
         manufacturer: manufacturer.email,
         txHash: externalTxHash
       });
@@ -1025,11 +1038,13 @@ apiRouter.post(
     try {
       const { productId, quantity, externalTxHash } = req.body;
       
-      if (!productId || !externalTxHash) {
+      if (!productId || !externalTxHash || !quantity) {
         return res.status(400).json({ 
-          message: 'Product ID and transaction hash are required' 
+          message: 'Product ID, quantity and transaction hash are required' 
         });
       }
+
+      const quantityToBuy = parseInt(quantity);
 
       // Find product (manufactured product)
       const product = await ManufacturedProduct.findById(productId);
@@ -1038,8 +1053,10 @@ apiRouter.post(
       }
 
       // Check stock
-      if (product.quantity < quantity) {
-        return res.status(400).json({ message: 'Insufficient stock' });
+      if (product.quantity < quantityToBuy) {
+        return res.status(400).json({ 
+          message: `Insufficient stock. Only ${product.quantity} units available` 
+        });
       }
 
       // Find buyer (customer)
@@ -1055,11 +1072,14 @@ apiRouter.post(
       }
 
       // Update product quantity
-      product.quantity -= quantity;
+      product.quantity -= quantityToBuy;
       if (product.quantity === 0) {
         product.status = 'sold_out';
       }
       await product.save();
+
+      // Calculate total amount in INR
+      const totalAmount = product.price * quantityToBuy;
 
       // Create customer transaction record
       const customerTransaction = new Transaction({
@@ -1069,8 +1089,8 @@ apiRouter.post(
         buyerName: buyer.name,
         sellerId: seller._id,
         sellerName: seller.name,
-        quantity: quantity,
-        amount: product.price * quantity,
+        quantity: quantityToBuy,
+        amount: totalAmount,
         txHash: externalTxHash,
         status: 'completed'
       });
@@ -1079,6 +1099,8 @@ apiRouter.post(
 
       console.log('✅ Customer purchase recorded:', {
         product: product.name,
+        quantity: quantityToBuy,
+        totalAmount: totalAmount,
         buyer: buyer.email,
         seller: seller.email,
         txHash: externalTxHash
@@ -1086,7 +1108,9 @@ apiRouter.post(
 
       res.status(200).json({
         message: 'Purchase successful',
-        transaction: customerTransaction
+        transaction: customerTransaction,
+        purchasedQuantity: quantityToBuy,
+        remainingStock: product.quantity
       });
 
     } catch (err) {
@@ -1112,9 +1136,6 @@ apiRouter.get(
         .sort({ timestamp: -1 });
       
       console.log(`✅ Found ${purchases.length} purchases for customer ${req.user.email}`);
-      purchases.forEach(p => {
-        console.log(`  - Purchase ID: ${p._id}, Product: ${p.productName}, Amount: $${p.amount}`);
-      });
       
       res.json(purchases);
     } catch (err) {
@@ -1152,22 +1173,10 @@ apiRouter.delete(
         buyerId: req.user.id
       });
 
-      console.log(`🔍 Purchase found:`, purchase ? 'Yes' : 'No');
-      
       if (!purchase) {
-        // Check if purchase exists at all
-        const anyPurchase = await Transaction.findById(purchaseId);
-        if (!anyPurchase) {
-          console.log(`❌ Purchase ${purchaseId} does not exist`);
-          return res.status(404).json({ 
-            message: 'Purchase not found' 
-          });
-        } else {
-          console.log(`❌ Purchase ${purchaseId} belongs to user ${anyPurchase.buyerId}, not ${req.user.id}`);
-          return res.status(403).json({ 
-            message: 'You do not have permission to delete this purchase' 
-          });
-        }
+        return res.status(404).json({ 
+          message: 'Purchase not found or unauthorized' 
+        });
       }
 
       // Delete the purchase
@@ -1228,171 +1237,6 @@ apiRouter.get(
     }
   }
 );
-
-/* --- Debug / Verification Routes --- */
-
-apiRouter.get('/debug/products', authenticateToken, async (req, res) => {
-  try {
-    const allProducts = await Product.find();
-    res.json({
-      total: allProducts.length,
-      products: allProducts.map(p => ({
-        id: p._id,
-        name: p.name,
-        image: p.image,
-        supplierId: p.supplierId,
-        supplierName: p.supplierName,
-        quantity: p.quantity
-      }))
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Debug manufactured products
-apiRouter.get('/debug/manufactured-products', authenticateToken, async (req, res) => {
-  try {
-    const products = await ManufacturedProduct.find();
-    res.json({
-      total: products.length,
-      products: products.map(p => ({
-        id: p._id,
-        name: p.name,
-        image: p.image,
-        description: p.description,
-        manufacturerId: p.manufacturerId,
-        manufacturerName: p.manufacturerName,
-        quantity: p.quantity,
-        status: p.status
-      }))
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Debug purchased materials
-apiRouter.get('/debug/purchased-materials', authenticateToken, async (req, res) => {
-  try {
-    const materials = await PurchasedMaterial.find();
-    res.json({
-      total: materials.length,
-      materials: materials.map(m => ({
-        id: m._id,
-        productId: m.productId,
-        productName: m.productName,
-        image: m.image,
-        manufacturerId: m.manufacturerId,
-        manufacturerName: m.manufacturerName,
-        supplierName: m.supplierName,
-        quantity: m.quantity,
-        status: m.status
-      }))
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Debug: Get manufacturer's purchased product IDs
-apiRouter.get('/debug/manufacturer-purchased/:manufacturerId', authenticateToken, async (req, res) => {
-  try {
-    const transactions = await Transaction.find({ 
-      buyerId: req.params.manufacturerId 
-    });
-    
-    const purchasedMaterials = await PurchasedMaterial.find({ 
-      manufacturerId: req.params.manufacturerId 
-    });
-    
-    res.json({
-      transactions: transactions.map(t => ({
-        id: t._id,
-        productId: t.productId?.toString(),
-        productName: t.productName,
-        txHash: t.txHash,
-        timestamp: t.timestamp
-      })),
-      purchasedMaterials: purchasedMaterials.map(p => ({
-        id: p._id,
-        productId: p.productId?.toString(),
-        productName: p.productName,
-        image: p.image,
-        txHash: p.txHash
-      })),
-      manufacturerId: req.params.manufacturerId,
-      transactionCount: transactions.length,
-      purchasedMaterialCount: purchasedMaterials.length
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Debug: Check if product is purchased by manufacturer
-apiRouter.get('/debug/check-purchase/:manufacturerId/:productId', authenticateToken, async (req, res) => {
-  try {
-    const transaction = await Transaction.findOne({
-      buyerId: req.params.manufacturerId,
-      productId: req.params.productId,
-      status: 'completed'
-    });
-    
-    const purchasedMaterial = await PurchasedMaterial.findOne({
-      manufacturerId: req.params.manufacturerId,
-      productId: req.params.productId
-    });
-    
-    res.json({
-      manufacturerId: req.params.manufacturerId,
-      productId: req.params.productId,
-      hasTransaction: !!transaction,
-      hasPurchasedMaterial: !!purchasedMaterial,
-      transaction: transaction ? {
-        id: transaction._id,
-        timestamp: transaction.timestamp,
-        txHash: transaction.txHash
-      } : null,
-      purchasedMaterial: purchasedMaterial ? {
-        id: purchasedMaterial._id,
-        image: purchasedMaterial.image,
-        status: purchasedMaterial.status
-      } : null
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Debug: Check product images
-apiRouter.get('/debug/product-images', authenticateToken, async (req, res) => {
-  try {
-    const rawProducts = await Product.find();
-    const manufacturedProducts = await ManufacturedProduct.find();
-    
-    res.json({
-      rawProducts: rawProducts.map(p => ({
-        id: p._id,
-        name: p.name,
-        image: p.image,
-        imageType: typeof p.image,
-        hasImage: !!p.image
-      })),
-      manufacturedProducts: manufacturedProducts.map(p => ({
-        id: p._id,
-        name: p.name,
-        image: p.image,
-        imageType: typeof p.image,
-        hasImage: !!p.image,
-        originalProductId: p.materialId,
-        description: p.description
-      }))
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
 // Apply the router to the app
 app.use('/api', apiRouter);

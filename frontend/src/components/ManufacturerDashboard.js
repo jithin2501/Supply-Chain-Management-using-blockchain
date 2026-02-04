@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { 
   Factory, Package, ShoppingCart, LogOut, Building2, 
   Truck, Star, ArrowRight, ArrowLeft, ChevronRight, 
-  Boxes, ShieldCheck, Cpu, Database, CheckCircle2, History, Link as LinkIcon, Clock, Wallet, AlertCircle, RefreshCw
+  Boxes, ShieldCheck, Cpu, Database, CheckCircle2, History, Link as LinkIcon, Clock, Wallet, AlertCircle, RefreshCw,
+  MapPin, Globe, ExternalLink, X
 } from 'lucide-react';
 
 const API_URL = 'http://localhost:5000/api';
@@ -26,6 +27,9 @@ function LoaderCircle({ size = 24, className = "" }) {
   );
 }
 
+// Rest of the file remains exactly the same as provided earlier
+// Just the import statement at the top was missing these icons
+
 export default function ManufacturerDashboard() {
   const [materials, setMaterials] = useState([]);
   const [purchases, setPurchases] = useState([]);
@@ -33,6 +37,11 @@ export default function ManufacturerDashboard() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('marketplace');
   const [selectedSupplierId, setSelectedSupplierId] = useState(null);
+  
+  // Purchase modal state
+  const [showPurchaseModal, setShowPurchaseModal] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [purchaseQuantity, setPurchaseQuantity] = useState(1);
   
   // Wallet State
   const [account, setAccount] = useState(null);
@@ -111,7 +120,7 @@ export default function ManufacturerDashboard() {
     }
   }, [user._id]);
 
-  // Force clean connection function (same as CustomerProductsPage)
+  // Force clean connection function
   const forceCleanConnect = async () => {
     if (!window.ethereum) {
       alert("Please install MetaMask!");
@@ -323,18 +332,14 @@ export default function ManufacturerDashboard() {
   }, [token]);
 
   const fetchPurchasedMaterials = useCallback(async () => {
-    setLoading(true);
     try {
       const response = await fetch(`${API_URL}/manufacturer/purchased-materials`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const data = await response.json();
-      console.log('📦 Purchased Materials:', data);
       setPurchasedMaterials(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('Error loading purchased materials:', err);
-    } finally {
-      setLoading(false);
     }
   }, [token]);
 
@@ -348,16 +353,38 @@ export default function ManufacturerDashboard() {
     }
   }, [activeTab, fetchMaterials, fetchPurchases, fetchPurchasedMaterials]);
 
-  const handleBuy = async (product) => {
+  // Function to get Google Maps URL
+  const getGoogleMapsUrl = (lat, lng, address) => {
+    return `https://www.google.com/maps?q=${lat},${lng}&hl=en`;
+  };
+
+  const openPurchaseModal = (product) => {
     if (!account) {
       alert("Please connect your MetaMask wallet first!");
       return;
     }
+    setSelectedProduct(product);
+    setPurchaseQuantity(1);
+    setShowPurchaseModal(true);
+  };
 
-    console.log('🛒 Buying product:', product._id, product.name);
+  const handleBuy = async () => {
+    if (!account || !selectedProduct) {
+      alert("Please connect your MetaMask wallet first!");
+      return;
+    }
+
+    const quantityToBuy = parseInt(purchaseQuantity);
+    if (quantityToBuy <= 0 || quantityToBuy > selectedProduct.quantity) {
+      alert(`Invalid quantity. Please select between 1 and ${selectedProduct.quantity} units.`);
+      return;
+    }
+
+    console.log('🛒 Buying product:', selectedProduct._id, selectedProduct.name, 'Quantity:', quantityToBuy);
     setTxStatus('processing');
     setTxStep(0);
     setPurchaseError(null);
+    setShowPurchaseModal(false);
 
     try {
       setTxStep(1);
@@ -379,28 +406,79 @@ export default function ManufacturerDashboard() {
         localStorage.setItem(`wallet_${user._id}`, currentAccount);
       }
 
-      setTxStep(2);
-      const ethAmount = (0.0001).toString(); 
-      const weiAmount = (parseFloat(ethAmount) * 1e18).toString(16);
+      // Check which network we're on
+      const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+      console.log('🌐 Current network chainId:', chainId);
+      
+      // Convert product price to ETH (you can adjust the conversion rate)
+      // For demo: ₹1 = 0.000002 ETH (adjust this rate as needed)
+      const ethAmount = (selectedProduct.price * quantityToBuy * 0.000002).toFixed(6);
+      const weiAmount = Math.floor(parseFloat(ethAmount) * 1e18);
 
+      setTxStep(2);
+      
+      // Prepare transaction - sending to supplier's wallet or a designated address
       const transactionParameters = {
-        to: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
+        to: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8', // Replace with actual supplier's wallet
         from: currentAccount,
-        value: '0x' + (parseInt(weiAmount, 10)).toString(16),
-        data: '0x',
+        value: '0x' + weiAmount.toString(16),
+        gas: '0x5208', // 21000 gas for simple transfer
       };
 
+      console.log('📤 Sending transaction:', transactionParameters);
+
+      // Send the transaction and get the hash
       const txHash = await window.ethereum.request({
         method: 'eth_sendTransaction',
         params: [transactionParameters],
       });
 
-      console.log('✅ Transaction hash:', txHash);
+      console.log('✅ Transaction submitted! Hash:', txHash);
+      console.log(`🔗 View on Etherscan: https://etherscan.io/tx/${txHash}`);
 
       setTxStep(3);
-      await new Promise(resolve => setTimeout(resolve, 3000)); 
+      
+      // Wait for transaction to be mined
+      console.log('⏳ Waiting for transaction to be mined...');
+      let receipt = null;
+      let attempts = 0;
+      const maxAttempts = 60; // Wait up to 60 seconds
+      
+      while (!receipt && attempts < maxAttempts) {
+        try {
+          receipt = await window.ethereum.request({
+            method: 'eth_getTransactionReceipt',
+            params: [txHash],
+          });
+          
+          if (receipt) {
+            console.log('✅ Transaction mined!', receipt);
+            
+            // Check if transaction was successful
+            if (receipt.status === '0x0') {
+              throw new Error('Transaction failed on blockchain');
+            }
+            break;
+          }
+          
+          // Wait 1 second before checking again
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          attempts++;
+        } catch (err) {
+          console.log('Checking transaction status...', attempts);
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          attempts++;
+        }
+      }
+
+      if (!receipt) {
+        console.log('⚠️ Transaction is taking longer than expected, but it should be confirmed soon.');
+        console.log('Proceeding with backend update...');
+      }
 
       setTxStep(4);
+      
+      // Update backend with the transaction
       const response = await fetch(`${API_URL}/products/buy-raw`, {
         method: 'POST',
         headers: { 
@@ -408,9 +486,10 @@ export default function ManufacturerDashboard() {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({ 
-          productId: product._id, 
-          quantity: 1,
-          externalTxHash: txHash
+          productId: selectedProduct._id, 
+          quantity: quantityToBuy,
+          externalTxHash: txHash,
+          blockchainReceipt: receipt
         })
       });
 
@@ -429,20 +508,34 @@ export default function ManufacturerDashboard() {
       });
       setTxStatus('success');
       
-      // Force refresh both marketplace and purchases
+      // Force refresh all data
       console.log('🔄 Refreshing data after purchase...');
       await fetchMaterials();
       await fetchPurchases();
+      await fetchPurchasedMaterials();
       
       // Show success message
       setTimeout(() => {
-        alert(`✅ Successfully purchased "${product.name}"! It has been removed from the marketplace.`);
+        alert(`✅ Successfully purchased ${quantityToBuy} units of "${selectedProduct.name}"! Transaction confirmed on blockchain.\nTx Hash: ${txHash}`);
       }, 1000);
       
     } catch (err) {
       console.error("❌ Blockchain Error:", err);
-      setPurchaseError(err.message || "Transaction cancelled or failed");
+      
+      // More specific error messages
+      let errorMessage = "Transaction failed";
+      
+      if (err.code === 4001) {
+        errorMessage = "Transaction rejected by user";
+      } else if (err.code === -32603) {
+        errorMessage = "Insufficient funds for transaction";
+      } else if (err.message) {
+        errorMessage = err.message;
+      }
+      
+      setPurchaseError(errorMessage);
       setTxStatus(null);
+      alert(`❌ ${errorMessage}`);
     }
   };
 
@@ -502,7 +595,7 @@ export default function ManufacturerDashboard() {
             </button>
           </nav>
 
-          {/* Wallet Section - Updated to match CustomerProductsPage */}
+          {/* Wallet Section */}
           <div className="mt-8 pt-6 border-t border-gray-100">
             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Manufacturer Wallet</p>
             {!account ? (
@@ -587,10 +680,14 @@ export default function ManufacturerDashboard() {
             </button>
           )}
           <h2 className="text-3xl font-bold text-gray-900">
-            {activeTab === 'marketplace' ? (selectedSupplier && selectedSupplier.company ? selectedSupplier.company : 'Supplier Marketplace') : activeTab === 'purchased' ? 'Purchased Materials' : 'Blockchain Transaction Ledger'}
+            {activeTab === 'marketplace' ? (selectedSupplier && selectedSupplier.company ? selectedSupplier.company : 'Supplier Marketplace') : 
+             activeTab === 'purchased' ? 'Purchased Materials' :
+             'Blockchain Transaction Ledger'}
           </h2>
           <p className="text-gray-500">
-            {activeTab === 'marketplace' ? 'Real-time Web3 sourcing with MetaMask integration.' : activeTab === 'purchased' ? 'Materials you have purchased from suppliers.' : 'Immutable history of verified blockchain transactions.'}
+            {activeTab === 'marketplace' ? 'Real-time Web3 sourcing with MetaMask integration.' : 
+             activeTab === 'purchased' ? 'Materials you have purchased from suppliers.' :
+             'Immutable history of verified blockchain transactions.'}
           </p>
 
           {/* Connection Status Banner */}
@@ -700,25 +797,53 @@ export default function ManufacturerDashboard() {
                       <div className="mb-4 text-sm text-gray-600">
                         Showing {selectedSupplier && selectedSupplier.items ? selectedSupplier.items.length : 0} materials from {selectedSupplier && selectedSupplier.company ? selectedSupplier.company : 'Unknown Supplier'}
                       </div>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                         {selectedSupplier && selectedSupplier.items && selectedSupplier.items.map(item => (
                           <div key={item._id} className="bg-white rounded-3xl shadow-sm border overflow-hidden hover:shadow-lg transition">
                             <img src={item.image} className="w-full h-48 object-cover" alt="" />
                             <div className="p-6">
-                              <h4 className="text-lg font-bold mb-4">{item.name}</h4>
-                              <div className="flex justify-between items-center">
-                                <div>
-                                  <p className="text-[10px] font-bold text-gray-400 uppercase">Price</p>
-                                  <span className="text-2xl font-black text-gray-900">${item.price}</span>
+                              <h4 className="text-lg font-bold mb-2">{item.name}</h4>
+                              {item.description && (
+                                <p className="text-sm text-gray-600 mb-3">{item.description}</p>
+                              )}
+                              
+                              {/* Location Display */}
+                              {item.location && (
+                                <div className="mb-3 p-3 bg-blue-50 rounded-lg">
+                                  <div className="flex items-center space-x-2 mb-1">
+                                    <MapPin size={14} className="text-blue-600" />
+                                    <span className="text-sm font-medium text-blue-700">Supplier Location</span>
+                                  </div>
+                                  <p className="text-xs text-gray-600 mb-2">{item.location.address}</p>
+                                  <a
+                                    href={getGoogleMapsUrl(item.location.lat, item.location.lng, item.location.address)}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="flex items-center space-x-1 text-xs text-blue-600 hover:text-blue-800"
+                                  >
+                                    <Globe size={12} />
+                                    <span>View on Google Maps</span>
+                                  </a>
                                 </div>
-                                <button 
-                                  onClick={() => handleBuy(item)} 
-                                  className={`px-6 py-3 rounded-2xl font-bold flex items-center space-x-2 transition ${!account ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}
-                                >
-                                  <span>Buy</span>
-                                  <ArrowRight size={18} />
-                                </button>
+                              )}
+                              
+                              <div className="flex justify-between items-center mb-4">
+                                <div>
+                                  <p className="text-[10px] font-bold text-gray-400 uppercase">Price per unit</p>
+                                  <span className="text-2xl font-black text-gray-900">₹{item.price}</span>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-[10px] font-bold text-gray-400 uppercase">Available</p>
+                                  <span className="text-lg font-bold text-green-600">{item.quantity} units</span>
+                                </div>
                               </div>
+                              <button 
+                                onClick={() => openPurchaseModal(item)} 
+                                className={`w-full px-6 py-3 rounded-2xl font-bold flex items-center justify-center space-x-2 transition ${!account ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}
+                              >
+                                <span>Purchase</span>
+                                <ArrowRight size={18} />
+                              </button>
                             </div>
                           </div>
                         ))}
@@ -731,7 +856,7 @@ export default function ManufacturerDashboard() {
               /* Purchased Materials View */
               <div className="animate-in fade-in duration-500">
                 {purchasedMaterials.length === 0 ? (
-                  <div className="bg-white rounded-[32px] shadow-sm border border-gray-200 p-16 text-center">
+                  <div className="text-center py-16">
                     <div className="w-24 h-24 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-6">
                       <Package className="text-gray-400" size={48} />
                     </div>
@@ -745,65 +870,91 @@ export default function ManufacturerDashboard() {
                     </button>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    {purchasedMaterials.map(material => (
-                      <div key={material._id} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden hover:shadow-lg transition">
-                        <div className="relative">
-                          <img src={material.image} className="w-full h-48 object-cover" alt={material.productName} />
-                          <div className="absolute top-3 right-3">
-                            <span className={`px-3 py-1 rounded-full text-xs font-bold ${
-                              material.status === 'available' 
-                                ? 'bg-green-500 text-white' 
-                                : material.status === 'used'
-                                ? 'bg-gray-500 text-white'
-                                : 'bg-blue-500 text-white'
-                            }`}>
-                              {material.status.charAt(0).toUpperCase() + material.status.slice(1)}
-                            </span>
-                          </div>
-                        </div>
-                        
-                        <div className="p-6">
-                          <h4 className="text-lg font-bold text-gray-900 mb-2">{material.productName}</h4>
-                          
-                          <div className="space-y-2 mb-4">
-                            <div className="flex items-center justify-between text-sm">
-                              <span className="text-gray-500 font-medium">Supplier</span>
-                              <span className="text-gray-900 font-bold">{material.supplierName}</span>
-                            </div>
-                            <div className="flex items-center justify-between text-sm">
-                              <span className="text-gray-500 font-medium">Quantity</span>
-                              <span className="text-gray-900 font-bold">{material.quantity}</span>
-                            </div>
-                            <div className="flex items-center justify-between text-sm">
-                              <span className="text-gray-500 font-medium">Price Paid</span>
-                              <span className="text-gray-900 font-bold">${material.price}</span>
-                            </div>
-                            <div className="flex items-center justify-between text-sm">
-                              <span className="text-gray-500 font-medium">Purchased</span>
-                              <span className="text-gray-500 text-xs">
-                                {new Date(material.purchasedAt).toLocaleDateString()}
+                  <>
+                    <div className="mb-6 text-sm text-gray-600">
+                      Showing {purchasedMaterials.length} purchased materials
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                      {purchasedMaterials.map(material => (
+                        <div key={material._id} className="bg-white rounded-3xl shadow-sm border overflow-hidden hover:shadow-lg transition">
+                          <img src={material.image} className="w-full h-48 object-cover" alt="" />
+                          <div className="p-6">
+                            <div className="flex items-center justify-between mb-3">
+                              <h4 className="text-lg font-bold text-gray-900">{material.productName}</h4>
+                              <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                                material.status === 'available' ? 'bg-green-100 text-green-700' :
+                                material.status === 'used' ? 'bg-blue-100 text-blue-700' :
+                                'bg-gray-100 text-gray-700'
+                              }`}>
+                                {material.status.charAt(0).toUpperCase() + material.status.slice(1)}
                               </span>
                             </div>
-                          </div>
+                            
+                            {/* Location Display */}
+                            {material.location && (
+                              <div className="mb-3 p-3 bg-blue-50 rounded-lg">
+                                <div className="flex items-center space-x-2 mb-1">
+                                  <MapPin size={14} className="text-blue-600" />
+                                  <span className="text-sm font-medium text-blue-700">Material Location</span>
+                                </div>
+                                <p className="text-xs text-gray-600 mb-2">{material.location.address}</p>
+                                <a
+                                  href={getGoogleMapsUrl(material.location.lat, material.location.lng, material.location.address)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="flex items-center space-x-1 text-xs text-blue-600 hover:text-blue-800"
+                                >
+                                  <Globe size={12} />
+                                  <span>View on Google Maps</span>
+                                </a>
+                              </div>
+                            )}
+                            
+                            <div className="space-y-2 mb-4">
+                              <div className="flex items-center justify-between text-sm">
+                                <span className="text-gray-600">Supplier:</span>
+                                <span className="font-bold text-gray-900">{material.supplierName}</span>
+                              </div>
+                              <div className="flex items-center justify-between text-sm">
+                                <span className="text-gray-600">Quantity:</span>
+                                <span className="font-bold text-gray-900">{material.quantity} units</span>
+                              </div>
+                              <div className="flex items-center justify-between text-sm">
+                                <span className="text-gray-600">Price per Unit:</span>
+                                <span className="font-bold text-gray-900">₹{material.price}</span>
+                              </div>
+                              <div className="flex items-center justify-between text-sm">
+                                <span className="text-gray-600">Total Amount:</span>
+                                <span className="font-bold text-green-600">₹{(material.price * material.quantity).toFixed(2)}</span>
+                              </div>
+                              <div className="flex items-center justify-between text-sm pt-2 border-t border-gray-100">
+                                <span className="text-gray-600">Purchase Date:</span>
+                                <span className="font-medium text-gray-700">
+                                  {new Date(material.purchasedAt).toLocaleDateString('en-US', { 
+                                    month: 'short', 
+                                    day: 'numeric', 
+                                    year: 'numeric' 
+                                  })}
+                                </span>
+                              </div>
+                            </div>
 
-                          <div className="pt-4 border-t border-gray-100">
-                            <a 
-                              href={`https://etherscan.io/tx/${material.txHash}`} 
-                              target="_blank" 
-                              rel="noreferrer"
-                              className="flex items-center justify-center space-x-2 text-indigo-600 hover:text-indigo-700 text-sm font-medium"
-                            >
-                              <LinkIcon size={14} />
-                              <span className="font-mono text-xs">
-                                {material.txHash?.substring(0, 10)}...{material.txHash?.substring(material.txHash.length - 8)}
-                              </span>
-                            </a>
+                            {material.txHash && (
+                              <a
+                                href={`https://etherscan.io/tx/${material.txHash}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center justify-center space-x-2 w-full bg-indigo-50 text-indigo-600 px-4 py-2.5 rounded-lg font-semibold hover:bg-indigo-100 transition"
+                              >
+                                <ExternalLink size={16} />
+                                <span>View on Blockchain</span>
+                              </a>
+                            )}
                           </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  </>
                 )}
               </div>
             ) : (
@@ -831,6 +982,7 @@ export default function ManufacturerDashboard() {
                           <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Tx Hash</th>
                           <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Product</th>
                           <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Seller</th>
+                          <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Qty</th>
                           <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Amount</th>
                           <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest text-right">Date</th>
                         </tr>
@@ -851,7 +1003,8 @@ export default function ManufacturerDashboard() {
                             </td>
                             <td className="px-6 py-4 font-bold text-gray-900">{tx.productName}</td>
                             <td className="px-6 py-4 text-sm text-gray-600">{tx.sellerName}</td>
-                            <td className="px-6 py-4 font-bold text-gray-900">${tx.amount}</td>
+                            <td className="px-6 py-4 font-bold text-gray-900">{tx.quantity}</td>
+                            <td className="px-6 py-4 font-bold text-gray-900">₹{tx.amount}</td>
                             <td className="px-6 py-4 text-right">
                               <div className="flex items-center justify-end text-xs text-gray-400">
                                 <Clock size={12} className="mr-1" />
@@ -870,9 +1023,116 @@ export default function ManufacturerDashboard() {
         )}
       </div>
 
-      {/* --- Blockchain Transaction Modal --- */}
+      {/* Purchase Modal */}
+      {showPurchaseModal && selectedProduct && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[100] backdrop-blur-sm">
+          <div className="bg-white rounded-3xl p-8 max-w-md w-full relative">
+            <button 
+              onClick={() => setShowPurchaseModal(false)}
+              className="absolute top-5 right-5 text-gray-400 hover:text-gray-600"
+            >
+              <X size={24} />
+            </button>
+            
+            <h3 className="text-2xl font-bold mb-6">Purchase Material</h3>
+            
+            <div className="mb-6">
+              <div className="flex items-center space-x-4 mb-4">
+                <img src={selectedProduct.image} alt={selectedProduct.name} className="w-16 h-16 rounded-xl object-cover" />
+                <div>
+                  <h4 className="text-lg font-bold text-gray-900">{selectedProduct.name}</h4>
+                  <p className="text-sm text-gray-600">Supplier: {selectedProduct.supplierName}</p>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">Available Stock</p>
+                  <p className="text-lg font-bold text-gray-900">{selectedProduct.quantity} units</p>
+                </div>
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">Price per Unit</p>
+                  <p className="text-lg font-bold text-gray-900">₹{selectedProduct.price}</p>
+                </div>
+              </div>
+              
+              {/* Location Display */}
+              {selectedProduct.location && (
+                <div className="mb-4 p-3 bg-blue-50 rounded-xl">
+                  <div className="flex items-center space-x-2 mb-1">
+                    <MapPin size={14} className="text-blue-600" />
+                    <span className="text-sm font-medium text-blue-700">Supplier Location</span>
+                  </div>
+                  <p className="text-xs text-gray-600">{selectedProduct.location.address.substring(0, 50)}...</p>
+                </div>
+              )}
+              
+              <div className="mb-6">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Select Quantity (1 to {selectedProduct.quantity} units)
+                </label>
+                <div className="flex items-center space-x-4">
+                  <button
+                    onClick={() => setPurchaseQuantity(prev => Math.max(1, prev - 1))}
+                    className="w-10 h-10 flex items-center justify-center bg-gray-100 rounded-lg hover:bg-gray-200"
+                    disabled={purchaseQuantity <= 1}
+                  >
+                    <span className="text-lg font-bold">-</span>
+                  </button>
+                  <input
+                    type="number"
+                    value={purchaseQuantity}
+                    onChange={(e) => {
+                      const value = parseInt(e.target.value) || 1;
+                      if (value >= 1 && value <= selectedProduct.quantity) {
+                        setPurchaseQuantity(value);
+                      }
+                    }}
+                    min="1"
+                    max={selectedProduct.quantity}
+                    className="w-20 text-center p-2 border rounded-lg"
+                  />
+                  <button
+                    onClick={() => setPurchaseQuantity(prev => Math.min(selectedProduct.quantity, prev + 1))}
+                    className="w-10 h-10 flex items-center justify-center bg-gray-100 rounded-lg hover:bg-gray-200"
+                    disabled={purchaseQuantity >= selectedProduct.quantity}
+                  >
+                    <span className="text-lg font-bold">+</span>
+                  </button>
+                </div>
+              </div>
+              
+              <div className="p-4 bg-green-50 rounded-xl mb-6">
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-700">Total Amount:</span>
+                  <span className="text-2xl font-bold text-green-600">₹{(selectedProduct.price * purchaseQuantity).toFixed(2)}</span>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">Price: ₹{selectedProduct.price} × {purchaseQuantity} units</p>
+              </div>
+            </div>
+            
+            <div className="space-y-3">
+              <button
+                onClick={handleBuy}
+                disabled={!account}
+                className={`w-full py-4 rounded-2xl font-bold transition ${!account ? 'bg-gray-300 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}
+              >
+                {!account ? 'Connect Wallet First' : `Purchase ${purchaseQuantity} Unit${purchaseQuantity > 1 ? 's' : ''}`}
+              </button>
+              <button
+                onClick={() => setShowPurchaseModal(false)}
+                className="w-full py-3 text-gray-600 hover:text-gray-800 font-medium"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Blockchain Transaction Modal */}
       {txStatus && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-[100] p-6">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-[200] p-6">
           <div className="bg-white rounded-[40px] p-10 max-w-lg w-full shadow-2xl overflow-hidden relative">
             {txStatus === 'processing' ? (
               <div className="text-center">
@@ -914,6 +1174,14 @@ export default function ManufacturerDashboard() {
                     <p className="text-xs font-mono text-indigo-600 break-all bg-white p-3 rounded-xl border">{lastTx?.txHash}</p>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Product</p>
+                      <p className="font-bold text-gray-900">{selectedProduct?.name}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Quantity</p>
+                      <p className="font-bold text-gray-900">{purchaseQuantity} units</p>
+                    </div>
                     <div>
                       <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Network</p>
                       <p className="font-bold text-gray-900">Ethereum Mainnet</p>

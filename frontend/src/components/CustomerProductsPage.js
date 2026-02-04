@@ -3,7 +3,8 @@ import {
   ShoppingBag, Package, Wallet, LogOut, CheckCircle2, 
   ArrowRight, Link as LinkIcon, Clock, AlertCircle, RefreshCw,
   ShieldCheck, Database, CheckCircle, Search, Filter,
-  ShoppingCart, Factory, ArrowLeft, Users, Tag, Eye, X, Trash2
+  ShoppingCart, Factory, ArrowLeft, Users, Tag, Eye, X, Trash2,
+  MapPin, Globe
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -42,7 +43,8 @@ export default function CustomerProductsPage() {
   const [isMetaMaskInstalled, setIsMetaMaskInstalled] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [viewImage, setViewImage] = useState(null);
-  // Removed debugInfo since it's not used
+  const [purchaseQuantity, setPurchaseQuantity] = useState(1);
+  const [showPurchaseModal, setShowPurchaseModal] = useState(false);
 
   const token = localStorage.getItem('token');
   const user = JSON.parse(localStorage.getItem('user') || '{}');
@@ -108,7 +110,11 @@ export default function CustomerProductsPage() {
     }
   }, [user._id]);
 
-  // Force clean connection function
+  // Function to get Google Maps URL
+  const getGoogleMapsUrl = (lat, lng, address) => {
+    return `https://www.google.com/maps?q=${lat},${lng}&hl=en`;
+  };
+
   const forceCleanConnect = async () => {
     if (!window.ethereum) {
       alert("Please install MetaMask!");
@@ -346,15 +352,32 @@ export default function CustomerProductsPage() {
     fetchPurchases();
   }, [fetchProducts, fetchPurchases]);
 
-  const handleBuyProduct = async (product) => {
+  const openPurchaseModal = (product) => {
     if (!account) {
       alert("Please connect your MetaMask wallet first!");
       return;
     }
-
     setSelectedProduct(product);
+    setPurchaseQuantity(1);
+    setShowPurchaseModal(true);
+  };
+
+  const handleBuyProduct = async () => {
+    if (!account || !selectedProduct) {
+      alert("Please connect your MetaMask wallet first!");
+      return;
+    }
+
+    const quantityToBuy = parseInt(purchaseQuantity);
+    if (quantityToBuy <= 0 || quantityToBuy > selectedProduct.quantity) {
+      alert(`Invalid quantity. Please select between 1 and ${selectedProduct.quantity} units.`);
+      return;
+    }
+
+    setSelectedProduct(selectedProduct);
     setTxStatus('processing');
     setTxStep(0);
+    setShowPurchaseModal(false);
 
     try {
       setTxStep(1);
@@ -376,24 +399,70 @@ export default function CustomerProductsPage() {
         localStorage.setItem(`wallet_${user._id}`, currentAccount);
       }
 
+      // Check which network we're on
+      const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+      console.log('🌐 Current network chainId:', chainId);
+      
+      // Convert product price to ETH (you can adjust the conversion rate)
+      // For demo: ₹1 = 0.000002 ETH (adjust this rate as needed)
+      const ethAmount = (selectedProduct.price * quantityToBuy * 0.000002).toFixed(6);
+      const weiAmount = Math.floor(parseFloat(ethAmount) * 1e18);
+
       setTxStep(2);
-      const ethAmount = (0.0001).toString();
-      const weiAmount = (parseFloat(ethAmount) * 1e18).toString(16);
 
       const transactionParameters = {
-        to: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
+        to: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8', // Replace with manufacturer's wallet
         from: currentAccount,
-        value: '0x' + (parseInt(weiAmount, 10)).toString(16),
-        data: '0x',
+        value: '0x' + weiAmount.toString(16),
+        gas: '0x5208', // 21000 gas for simple transfer
       };
+
+      console.log('📤 Sending transaction:', transactionParameters);
 
       const txHash = await window.ethereum.request({
         method: 'eth_sendTransaction',
         params: [transactionParameters],
       });
 
+      console.log('✅ Transaction submitted! Hash:', txHash);
+      console.log(`🔗 View on Etherscan: https://etherscan.io/tx/${txHash}`);
+
       setTxStep(3);
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      // Wait for transaction to be mined
+      console.log('⏳ Waiting for transaction to be mined...');
+      let receipt = null;
+      let attempts = 0;
+      const maxAttempts = 60;
+      
+      while (!receipt && attempts < maxAttempts) {
+        try {
+          receipt = await window.ethereum.request({
+            method: 'eth_getTransactionReceipt',
+            params: [txHash],
+          });
+          
+          if (receipt) {
+            console.log('✅ Transaction mined!', receipt);
+            
+            if (receipt.status === '0x0') {
+              throw new Error('Transaction failed on blockchain');
+            }
+            break;
+          }
+          
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          attempts++;
+        } catch (err) {
+          console.log('Checking transaction status...', attempts);
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          attempts++;
+        }
+      }
+
+      if (!receipt) {
+        console.log('⚠️ Transaction is taking longer than expected, but it should be confirmed soon.');
+      }
 
       setTxStep(4);
       const response = await fetch(`${API_URL}/products/buy-final`, {
@@ -403,9 +472,10 @@ export default function CustomerProductsPage() {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({ 
-          productId: product._id, 
-          quantity: 1,
-          externalTxHash: txHash
+          productId: selectedProduct._id, 
+          quantity: quantityToBuy,
+          externalTxHash: txHash,
+          blockchainReceipt: receipt
         })
       });
 
@@ -427,8 +497,19 @@ export default function CustomerProductsPage() {
       fetchPurchases();
       
     } catch (err) {
-      console.error("Blockchain Error:", err);
-      alert(err.message || "Transaction cancelled or failed");
+      console.error("❌ Blockchain Error:", err);
+      
+      let errorMessage = "Transaction failed";
+      
+      if (err.code === 4001) {
+        errorMessage = "Transaction rejected by user";
+      } else if (err.code === -32603) {
+        errorMessage = "Insufficient funds for transaction";
+      } else if (err.message) {
+        errorMessage = err.message;
+      }
+      
+      alert(`❌ ${errorMessage}`);
       setTxStatus(null);
     }
   };
@@ -531,9 +612,9 @@ export default function CustomerProductsPage() {
                 className="w-full px-4 py-3 border border-gray-300 rounded-xl bg-white focus:ring-2 focus:ring-blue-500"
               >
                 <option value="all">All Prices</option>
-                <option value="under50">Under $50</option>
-                <option value="50to100">$50 - $100</option>
-                <option value="over100">Over $100</option>
+                <option value="under50">Under ₹50</option>
+                <option value="50to100">₹50 - ₹100</option>
+                <option value="over100">Over ₹100</option>
               </select>
             </div>
             <div className="flex items-center justify-between">
@@ -664,7 +745,7 @@ export default function CustomerProductsPage() {
                   )}
                 </div>
 
-                {/* Product Details - Simplified */}
+                {/* Product Details */}
                 <div className="p-6">
                   {/* Product Name */}
                   <h4 className="text-xl font-bold text-gray-900 mb-3">
@@ -679,11 +760,31 @@ export default function CustomerProductsPage() {
                     </p>
                   </div>
 
+                  {/* Location Display */}
+                  {product.location && (
+                    <div className="mb-4 p-3 bg-blue-50 rounded-lg">
+                      <div className="flex items-center space-x-2 mb-1">
+                        <MapPin size={14} className="text-blue-600" />
+                        <span className="text-sm font-medium text-blue-700">Product Location</span>
+                      </div>
+                      <p className="text-xs text-gray-600 mb-2">{product.location.address.substring(0, 40)}...</p>
+                      <a
+                        href={getGoogleMapsUrl(product.location.lat, product.location.lng, product.location.address)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center space-x-1 text-xs text-blue-600 hover:text-blue-800"
+                      >
+                        <Globe size={12} />
+                        <span>View on Google Maps</span>
+                      </a>
+                    </div>
+                  )}
+
                   {/* Price and Stock - Side by Side */}
                   <div className="flex items-center justify-between mb-5">
                     <div>
                       <p className="text-xs text-gray-500 mb-1">Price</p>
-                      <p className="text-2xl font-bold text-gray-900">${product.price}</p>
+                      <p className="text-2xl font-bold text-gray-900">₹{product.price}</p>
                     </div>
                     <div className="text-right">
                       <p className="text-xs text-gray-500 mb-1">In Stock</p>
@@ -695,7 +796,7 @@ export default function CustomerProductsPage() {
 
                   {/* Buy Button */}
                   <button 
-                    onClick={() => handleBuyProduct(product)}
+                    onClick={() => openPurchaseModal(product)}
                     disabled={!account || product.quantity === 0}
                     className={`w-full py-3 rounded-xl font-bold flex items-center justify-center space-x-2 transition-all ${
                       !account || product.quantity === 0 
@@ -742,6 +843,7 @@ export default function CustomerProductsPage() {
                     <tr>
                       <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Product</th>
                       <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Manufacturer</th>
+                      <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Qty</th>
                       <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Amount</th>
                       <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest text-right">Date</th>
                       <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest text-center">Actions</th>
@@ -765,7 +867,8 @@ export default function CustomerProductsPage() {
                           )}
                         </td>
                         <td className="px-6 py-4 text-sm text-gray-600">{purchase.sellerName}</td>
-                        <td className="px-6 py-4 font-bold text-gray-900">${purchase.amount}</td>
+                        <td className="px-6 py-4 font-bold text-gray-900">{purchase.quantity}</td>
+                        <td className="px-6 py-4 font-bold text-gray-900">₹{purchase.amount}</td>
                         <td className="px-6 py-4 text-right">
                           <div className="flex items-center justify-end text-xs text-gray-400">
                             <Clock size={12} className="mr-1" />
@@ -803,6 +906,113 @@ export default function CustomerProductsPage() {
           )}
         </div>
       </div>
+
+      {/* Purchase Modal */}
+      {showPurchaseModal && selectedProduct && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[150] backdrop-blur-sm">
+          <div className="bg-white rounded-3xl p-8 max-w-md w-full relative">
+            <button 
+              onClick={() => setShowPurchaseModal(false)}
+              className="absolute top-5 right-5 text-gray-400 hover:text-gray-600"
+            >
+              <X size={24} />
+            </button>
+            
+            <h3 className="text-2xl font-bold mb-6">Purchase Product</h3>
+            
+            <div className="mb-6">
+              <div className="flex items-center space-x-4 mb-4">
+                <img src={selectedProduct.image} alt={selectedProduct.name} className="w-16 h-16 rounded-xl object-cover" />
+                <div>
+                  <h4 className="text-lg font-bold text-gray-900">{selectedProduct.name}</h4>
+                  <p className="text-sm text-gray-600">Manufacturer: {selectedProduct.manufacturerName || selectedProduct.company}</p>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">Available Stock</p>
+                  <p className="text-lg font-bold text-gray-900">{selectedProduct.quantity} units</p>
+                </div>
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">Price per Unit</p>
+                  <p className="text-lg font-bold text-gray-900">₹{selectedProduct.price}</p>
+                </div>
+              </div>
+              
+              {/* Location Display */}
+              {selectedProduct.location && (
+                <div className="mb-4 p-3 bg-blue-50 rounded-xl">
+                  <div className="flex items-center space-x-2 mb-1">
+                    <MapPin size={14} className="text-blue-600" />
+                    <span className="text-sm font-medium text-blue-700">Product Location</span>
+                  </div>
+                  <p className="text-xs text-gray-600">{selectedProduct.location.address.substring(0, 50)}...</p>
+                </div>
+              )}
+              
+              <div className="mb-6">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Select Quantity (1 to {selectedProduct.quantity} units)
+                </label>
+                <div className="flex items-center space-x-4">
+                  <button
+                    onClick={() => setPurchaseQuantity(prev => Math.max(1, prev - 1))}
+                    className="w-10 h-10 flex items-center justify-center bg-gray-100 rounded-lg hover:bg-gray-200"
+                    disabled={purchaseQuantity <= 1}
+                  >
+                    <span className="text-lg font-bold">-</span>
+                  </button>
+                  <input
+                    type="number"
+                    value={purchaseQuantity}
+                    onChange={(e) => {
+                      const value = parseInt(e.target.value) || 1;
+                      if (value >= 1 && value <= selectedProduct.quantity) {
+                        setPurchaseQuantity(value);
+                      }
+                    }}
+                    min="1"
+                    max={selectedProduct.quantity}
+                    className="w-20 text-center p-2 border rounded-lg"
+                  />
+                  <button
+                    onClick={() => setPurchaseQuantity(prev => Math.min(selectedProduct.quantity, prev + 1))}
+                    className="w-10 h-10 flex items-center justify-center bg-gray-100 rounded-lg hover:bg-gray-200"
+                    disabled={purchaseQuantity >= selectedProduct.quantity}
+                  >
+                    <span className="text-lg font-bold">+</span>
+                  </button>
+                </div>
+              </div>
+              
+              <div className="p-4 bg-green-50 rounded-xl mb-6">
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-700">Total Amount:</span>
+                  <span className="text-2xl font-bold text-green-600">₹{(selectedProduct.price * purchaseQuantity).toFixed(2)}</span>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">Price: ₹{selectedProduct.price} × {purchaseQuantity} units</p>
+              </div>
+            </div>
+            
+            <div className="space-y-3">
+              <button
+                onClick={handleBuyProduct}
+                disabled={!account}
+                className={`w-full py-4 rounded-2xl font-bold transition ${!account ? 'bg-gray-300 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 text-white'}`}
+              >
+                {!account ? 'Connect Wallet First' : `Purchase ${purchaseQuantity} Unit${purchaseQuantity > 1 ? 's' : ''}`}
+              </button>
+              <button
+                onClick={() => setShowPurchaseModal(false)}
+                className="w-full py-3 text-gray-600 hover:text-gray-800 font-medium"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Image View Modal */}
       {viewImage && (
@@ -870,6 +1080,14 @@ export default function CustomerProductsPage() {
                     <p className="text-xs font-mono text-blue-600 break-all bg-white p-3 rounded-xl border">{lastTx?.txHash}</p>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Product</p>
+                      <p className="font-bold text-gray-900">{selectedProduct?.name}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Quantity</p>
+                      <p className="font-bold text-gray-900">{purchaseQuantity} units</p>
+                    </div>
                     <div>
                       <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Network</p>
                       <p className="font-bold text-gray-900">Ethereum Mainnet</p>
