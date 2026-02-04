@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { 
   Package, Plus, LayoutDashboard, Truck, LogOut, 
   Edit, Trash2, Box, X, Image as ImageIcon, Loader2, ArrowRight,
-  Receipt, DollarSign, CheckCircle, ExternalLink, Calendar, User
+  Receipt, DollarSign, CheckCircle, ExternalLink, Calendar, User,
+  ShoppingCart, Archive, Tag
 } from 'lucide-react';
 
 // Ensure this matches your backend port exactly
@@ -10,6 +11,7 @@ const API_URL = 'http://localhost:5000/api';
 
 export default function SupplierDashboard() {
   const [products, setProducts] = useState([]);
+  const [purchasedMaterials, setPurchasedMaterials] = useState([]);
   const [paymentReceipts, setPaymentReceipts] = useState([]);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -109,15 +111,62 @@ export default function SupplierDashboard() {
     }
   }, []);
 
+  // Fetch purchased materials (materials that have been sold)
+  const fetchPurchasedMaterials = useCallback(async () => {
+    const storedToken = localStorage.getItem('token');
+    
+    if (!storedToken) {
+      console.warn("⚠️ No token found for fetching purchased materials.");
+      return;
+    }
+    
+    try {
+      console.log("📦 Fetching purchased materials from:", `${API_URL}/supplier/purchased-materials`);
+      
+      const response = await fetch(`${API_URL}/supplier/purchased-materials`, { 
+        headers: { 
+          'Authorization': `Bearer ${storedToken}`,
+          'Accept': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text(); 
+        console.error(`❌ Server Error ${response.status}:`, errorText);
+        if (response.status === 401 || response.status === 403) {
+          handleLogout();
+        }
+        return;
+      }
+
+      const data = await response.json();
+      console.log("✅ Purchased materials received:", data);
+      
+      setPurchasedMaterials(Array.isArray(data) ? data : (data.materials || []));
+    } catch (err) {
+      console.error('❌ Fetch purchased materials error:', err);
+    }
+  }, []);
+
   // Run fetch on mount
   useEffect(() => {
     fetchMyProducts();
+    fetchPurchasedMaterials();
     fetchPaymentReceipts();
-  }, [fetchMyProducts, fetchPaymentReceipts]);
+  }, [fetchMyProducts, fetchPurchasedMaterials, fetchPaymentReceipts]);
 
   const handleInputChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
+
+  // Filter products to show only those NOT purchased (not in purchasedMaterials)
+  const getAvailableProducts = () => {
+    const purchasedProductIds = purchasedMaterials.map(pm => pm.productId?.toString() || pm.originalProductId?.toString());
+    return products.filter(product => !purchasedProductIds.includes(product._id?.toString()));
+  };
+
+  // Get available (unpurchased) products
+  const availableProducts = getAvailableProducts();
 
   const handleAddProduct = async (e) => {
     e.preventDefault();
@@ -222,6 +271,29 @@ export default function SupplierDashboard() {
     }
   };
 
+  const handleDeleteReceipt = async (receiptId) => {
+    const storedToken = localStorage.getItem('token');
+    if (!window.confirm('Are you sure you want to delete this payment receipt? This action cannot be undone.')) return;
+    
+    try {
+      const response = await fetch(`${API_URL}/supplier/receipts/${receiptId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${storedToken}` }
+      });
+
+      if (response.ok) {
+        setPaymentReceipts(prev => prev.filter(r => r._id !== receiptId));
+        alert('Receipt deleted successfully');
+      } else {
+        const error = await response.json();
+        alert(error.message || 'Failed to delete receipt');
+      }
+    } catch (err) {
+      console.error('Error deleting receipt:', err);
+      alert('Error deleting receipt');
+    }
+  };
+
   const openEditModal = (product) => {
     setEditingProduct(product);
     setFormData({
@@ -267,6 +339,15 @@ export default function SupplierDashboard() {
               <span className="font-medium">Manage Materials</span>
             </button>
             <button
+              onClick={() => setActiveSection('purchased')}
+              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition ${
+                activeSection === 'purchased' ? 'bg-blue-50 text-blue-600 shadow-sm' : 'text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              <ShoppingCart size={20} />
+              <span className="font-medium">Purchased Materials</span>
+            </button>
+            <button
               onClick={() => setActiveSection('payments')}
               className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition ${
                 activeSection === 'payments' ? 'bg-blue-50 text-blue-600 shadow-sm' : 'text-gray-600 hover:bg-gray-50'
@@ -299,9 +380,10 @@ export default function SupplierDashboard() {
               <h2 className="text-3xl font-bold text-gray-900">
                 {activeSection === 'inventory' ? 'Inventory Overview' : 
                  activeSection === 'materials' ? 'Manage Materials' : 
+                 activeSection === 'purchased' ? 'Purchased Materials' :
                  'Payment Receipts'}
               </h2>
-              {activeSection !== 'payments' && (
+              {(activeSection === 'materials' || activeSection === 'inventory') && (
                 <button
                   onClick={() => setShowAddModal(true)}
                   className="flex items-center space-x-2 bg-blue-600 text-white px-6 py-3 rounded-xl font-semibold hover:bg-blue-700 transition shadow-lg"
@@ -321,7 +403,7 @@ export default function SupplierDashboard() {
                       <div className="p-3 bg-blue-50 rounded-xl">
                         <Box className="text-blue-600" size={24} />
                       </div>
-                      <span className="text-3xl font-bold text-gray-900">{products.length}</span>
+                      <span className="text-3xl font-bold text-gray-900">{availableProducts.length}</span>
                     </div>
                     <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Total Materials Listed</h3>
                   </div>
@@ -332,7 +414,7 @@ export default function SupplierDashboard() {
                         <Package className="text-green-600" size={24} />
                       </div>
                       <span className="text-3xl font-bold text-gray-900">
-                        {products.reduce((sum, p) => sum + Number(p.quantity), 0)}
+                        {availableProducts.reduce((sum, p) => sum + Number(p.quantity), 0)}
                       </span>
                     </div>
                     <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Total Stock Units</h3>
@@ -344,7 +426,7 @@ export default function SupplierDashboard() {
                         <Truck className="text-purple-600" size={24} />
                       </div>
                       <span className="text-3xl font-bold text-gray-900">
-                        ${products.reduce((sum, p) => sum + (Number(p.price) * Number(p.quantity)), 0).toFixed(2)}
+                        ${availableProducts.reduce((sum, p) => sum + (Number(p.price) * Number(p.quantity)), 0).toFixed(2)}
                       </span>
                     </div>
                     <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Total Inventory Value</h3>
@@ -352,7 +434,7 @@ export default function SupplierDashboard() {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {products.map(product => (
+                  {availableProducts.map(product => (
                     <div key={product._id} className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden hover:shadow-lg transition">
                       <img src={product.image} alt={product.name} className="w-full h-48 object-cover" />
                       <div className="p-6">
@@ -401,7 +483,7 @@ export default function SupplierDashboard() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {products.map(product => (
+                    {availableProducts.map(product => (
                       <tr key={product._id} className="hover:bg-gray-50 transition">
                         <td className="px-6 py-4 flex items-center space-x-4">
                           <img src={product.image} className="w-12 h-12 rounded-xl object-cover" alt="" />
@@ -422,6 +504,121 @@ export default function SupplierDashboard() {
                   </tbody>
                 </table>
               </div>
+            )}
+
+            {/* Purchased Materials Section */}
+            {activeSection === 'purchased' && (
+              <>
+                {/* Stats Summary */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                  <div className="bg-gradient-to-br from-orange-50 to-amber-50 p-6 rounded-2xl shadow-sm border border-orange-100">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="p-3 bg-white rounded-xl shadow-sm">
+                        <ShoppingCart className="text-orange-600" size={24} />
+                      </div>
+                      <span className="text-3xl font-bold text-gray-900">{purchasedMaterials.length}</span>
+                    </div>
+                    <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider">Materials Sold</h3>
+                  </div>
+
+                  <div className="bg-gradient-to-br from-teal-50 to-cyan-50 p-6 rounded-2xl shadow-sm border border-teal-100">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="p-3 bg-white rounded-xl shadow-sm">
+                        <Archive className="text-teal-600" size={24} />
+                      </div>
+                      <span className="text-3xl font-bold text-gray-900">
+                        {purchasedMaterials.reduce((sum, m) => sum + (m.quantity || 0), 0)}
+                      </span>
+                    </div>
+                    <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider">Total Units Sold</h3>
+                  </div>
+
+                  <div className="bg-gradient-to-br from-emerald-50 to-green-50 p-6 rounded-2xl shadow-sm border border-emerald-100">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="p-3 bg-white rounded-xl shadow-sm">
+                        <DollarSign className="text-emerald-600" size={24} />
+                      </div>
+                      <span className="text-3xl font-bold text-gray-900">
+                        ${purchasedMaterials.reduce((sum, m) => sum + (m.price * m.quantity), 0).toFixed(2)}
+                      </span>
+                    </div>
+                    <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider">Total Value Sold</h3>
+                  </div>
+                </div>
+
+                {/* Purchased Materials Grid */}
+                {purchasedMaterials.length > 0 ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {purchasedMaterials.map((material) => (
+                      <div key={material._id} className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden hover:shadow-lg transition">
+                        <div className="relative">
+                          <img src={material.image} alt={material.productName} className="w-full h-48 object-cover" />
+                          <div className="absolute top-3 right-3">
+                            <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-green-500 text-white shadow-lg">
+                              <CheckCircle size={12} className="mr-1" />
+                              SOLD
+                            </span>
+                          </div>
+                        </div>
+                        <div className="p-6">
+                          <h3 className="text-xl font-bold text-gray-900 mb-3">{material.productName}</h3>
+                          
+                          <div className="space-y-2 mb-4">
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-gray-600">Buyer:</span>
+                              <span className="font-bold text-gray-900">{material.manufacturerName}</span>
+                            </div>
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-gray-600">Quantity Sold:</span>
+                              <span className="font-bold text-gray-900">{material.quantity} units</span>
+                            </div>
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-gray-600">Price per Unit:</span>
+                              <span className="font-bold text-gray-900">${material.price}</span>
+                            </div>
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-gray-600">Total Amount:</span>
+                              <span className="font-bold text-green-600 text-lg">${(material.price * material.quantity).toFixed(2)}</span>
+                            </div>
+                            <div className="flex items-center justify-between text-sm pt-2 border-t border-gray-100">
+                              <span className="text-gray-600">Date Purchased:</span>
+                              <span className="font-medium text-gray-700">
+                                {new Date(material.purchasedAt).toLocaleDateString('en-US', { 
+                                  month: 'short', 
+                                  day: 'numeric', 
+                                  year: 'numeric' 
+                                })}
+                              </span>
+                            </div>
+                          </div>
+
+                          {material.txHash && (
+                            <a
+                              href={`https://etherscan.io/tx/${material.txHash}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center justify-center space-x-2 w-full bg-blue-50 text-blue-600 px-4 py-2.5 rounded-lg font-semibold hover:bg-blue-100 transition group"
+                            >
+                              <ExternalLink size={16} />
+                              <span>View on Blockchain</span>
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="bg-white p-20 rounded-3xl border-2 border-dashed border-gray-200 text-center">
+                    <ShoppingCart className="mx-auto text-gray-300 mb-6" size={64} />
+                    <h3 className="text-2xl font-bold text-gray-900 mb-2">No Purchased Materials Yet</h3>
+                    <p className="text-gray-500 mb-6">When manufacturers buy your materials, they will appear here.</p>
+                    <div className="inline-flex items-center space-x-2 px-6 py-3 bg-orange-50 text-orange-600 rounded-lg font-medium">
+                      <Archive size={20} />
+                      <span>Materials are tracked on blockchain</span>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
 
             {/* Payment Receipts Section */}
@@ -498,6 +695,7 @@ export default function SupplierDashboard() {
                             </th>
                             <th className="px-6 py-4 text-xs font-bold text-gray-600 uppercase tracking-widest">Status</th>
                             <th className="px-6 py-4 text-xs font-bold text-gray-600 uppercase tracking-widest">Blockchain</th>
+                            <th className="px-6 py-4 text-xs font-bold text-gray-600 uppercase tracking-widest text-center">Actions</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
@@ -558,6 +756,15 @@ export default function SupplierDashboard() {
                                   </a>
                                 )}
                               </td>
+                              <td className="px-6 py-4 text-center">
+                                <button
+                                  onClick={() => handleDeleteReceipt(receipt._id)}
+                                  className="p-2 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg transition"
+                                  title="Delete receipt"
+                                >
+                                  <Trash2 size={18} />
+                                </button>
+                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -579,11 +786,26 @@ export default function SupplierDashboard() {
             )}
 
             {/* Empty State */}
-            {products.length === 0 && !loading && (
+            {availableProducts.length === 0 && !loading && activeSection === 'inventory' && (
               <div className="bg-white p-20 rounded-3xl border-2 border-dashed border-gray-200 text-center">
                 <Box className="mx-auto text-gray-300 mb-6" size={64} />
-                <h3 className="text-2xl font-bold text-gray-900 mb-2">Inventory is Empty</h3>
-                <p className="text-gray-500">Add your first material to start selling to manufacturers.</p>
+                <h3 className="text-2xl font-bold text-gray-900 mb-2">No Available Materials</h3>
+                <p className="text-gray-500 mb-4">
+                  {purchasedMaterials.length > 0 
+                    ? "All your materials have been purchased! Check the 'Purchased Materials' section." 
+                    : "Add your first material to start selling to manufacturers."}
+                </p>
+              </div>
+            )}
+            {availableProducts.length === 0 && !loading && activeSection === 'materials' && (
+              <div className="bg-white p-20 rounded-3xl border-2 border-dashed border-gray-200 text-center">
+                <Box className="mx-auto text-gray-300 mb-6" size={64} />
+                <h3 className="text-2xl font-bold text-gray-900 mb-2">No Available Materials</h3>
+                <p className="text-gray-500 mb-4">
+                  {purchasedMaterials.length > 0 
+                    ? "All your materials have been purchased! Check the 'Purchased Materials' section." 
+                    : "Add your first material to start selling to manufacturers."}
+                </p>
               </div>
             )}
           </div>

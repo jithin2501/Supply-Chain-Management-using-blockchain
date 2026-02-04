@@ -682,6 +682,36 @@ apiRouter.post(
 
 /* --- Supplier Routes --- */
 
+// SUPPLIER: Get purchased materials (materials that have been sold to manufacturers)
+apiRouter.get(
+  '/supplier/purchased-materials',
+  authenticateToken,
+  authorizeRole('suppliers'),
+  async (req, res) => {
+    try {
+      console.log(`📦 Fetching purchased materials for supplier: ${req.user.email} (ID: ${req.user.id})`);
+      
+      // Find all purchased materials where this supplier is the original seller
+      const purchasedMaterials = await PurchasedMaterial.find({ 
+        supplierId: req.user.id
+      }).sort({ purchasedAt: -1 });
+      
+      console.log(`✅ Found ${purchasedMaterials.length} purchased materials for supplier ${req.user.email}`);
+      purchasedMaterials.forEach(m => {
+        console.log(`  - Material: ${m.productName}, Buyer: ${m.manufacturerName}, Qty: ${m.quantity}, Status: ${m.status}`);
+      });
+      
+      res.json(purchasedMaterials);
+    } catch (err) {
+      console.error('❌ Error fetching purchased materials:', err);
+      res.status(500).json({ 
+        message: 'Error fetching purchased materials', 
+        error: err.message 
+      });
+    }
+  }
+);
+
 // SUPPLIER: Get payment receipts (transactions where supplier sold materials)
 apiRouter.get(
   '/supplier/receipts',
@@ -707,6 +737,69 @@ apiRouter.get(
       console.error('❌ Error fetching payment receipts:', err);
       res.status(500).json({ 
         message: 'Error fetching payment receipts', 
+        error: err.message 
+      });
+    }
+  }
+);
+
+// SUPPLIER: Delete a payment receipt
+apiRouter.delete(
+  '/supplier/receipts/:receiptId',
+  authenticateToken,
+  authorizeRole('suppliers'),
+  async (req, res) => {
+    try {
+      const { receiptId } = req.params;
+      
+      console.log(`🗑️ Delete receipt request: ${receiptId} by supplier ${req.user.email} (ID: ${req.user.id})`);
+
+      // Validate ObjectId format
+      if (!mongoose.Types.ObjectId.isValid(receiptId)) {
+        console.log(`❌ Invalid ObjectId format: ${receiptId}`);
+        return res.status(400).json({ 
+          message: 'Invalid receipt ID format' 
+        });
+      }
+
+      // Find the receipt and verify it belongs to this supplier
+      const receipt = await Transaction.findOne({
+        _id: receiptId,
+        sellerId: req.user.id
+      });
+
+      console.log(`🔍 Receipt found:`, receipt ? 'Yes' : 'No');
+      
+      if (!receipt) {
+        // Check if receipt exists at all
+        const anyReceipt = await Transaction.findById(receiptId);
+        if (!anyReceipt) {
+          console.log(`❌ Receipt ${receiptId} does not exist`);
+          return res.status(404).json({ 
+            message: 'Receipt not found' 
+          });
+        } else {
+          console.log(`❌ Receipt ${receiptId} belongs to seller ${anyReceipt.sellerId}, not ${req.user.id}`);
+          return res.status(403).json({ 
+            message: 'You do not have permission to delete this receipt' 
+          });
+        }
+      }
+
+      // Delete the receipt
+      await Transaction.deleteOne({ _id: receiptId });
+
+      console.log(`✅ Receipt deleted: ${receiptId} by supplier ${req.user.email}`);
+
+      res.json({ 
+        message: 'Receipt deleted successfully',
+        receiptId 
+      });
+
+    } catch (err) {
+      console.error('❌ Error deleting receipt:', err);
+      res.status(500).json({ 
+        message: 'Error deleting receipt', 
         error: err.message 
       });
     }
