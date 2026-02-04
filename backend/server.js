@@ -680,6 +680,41 @@ apiRouter.post(
   }
 );
 
+/* --- Supplier Routes --- */
+
+// SUPPLIER: Get payment receipts (transactions where supplier sold materials)
+apiRouter.get(
+  '/supplier/receipts',
+  authenticateToken,
+  authorizeRole('suppliers'),
+  async (req, res) => {
+    try {
+      console.log(`🧾 Fetching payment receipts for supplier: ${req.user.email} (ID: ${req.user.id})`);
+      
+      // Find all transactions where this supplier is the seller
+      const receipts = await Transaction.find({ 
+        sellerId: req.user.id,
+        status: 'completed' // Only show completed transactions
+      }).sort({ timestamp: -1 });
+      
+      console.log(`✅ Found ${receipts.length} payment receipts for supplier ${req.user.email}`);
+      receipts.forEach(r => {
+        console.log(`  - Receipt ID: ${r._id}, Product: ${r.productName}, Buyer: ${r.buyerName}, Amount: $${r.amount}`);
+      });
+      
+      res.json(receipts);
+    } catch (err) {
+      console.error('❌ Error fetching payment receipts:', err);
+      res.status(500).json({ 
+        message: 'Error fetching payment receipts', 
+        error: err.message 
+      });
+    }
+  }
+);
+
+/* --- Manufacturer Routes --- */
+
 // MANUFACTURER: Get purchased materials
 apiRouter.get(
   '/manufacturer/purchased-materials',

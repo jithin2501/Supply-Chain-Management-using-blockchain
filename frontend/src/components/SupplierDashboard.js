@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { 
   Package, Plus, LayoutDashboard, Truck, LogOut, 
-  Edit, Trash2, Box, X, Image as ImageIcon, Loader2, ArrowRight
+  Edit, Trash2, Box, X, Image as ImageIcon, Loader2, ArrowRight,
+  Receipt, DollarSign, CheckCircle, ExternalLink, Calendar, User
 } from 'lucide-react';
 
 // Ensure this matches your backend port exactly
@@ -9,6 +10,7 @@ const API_URL = 'http://localhost:5000/api';
 
 export default function SupplierDashboard() {
   const [products, setProducts] = useState([]);
+  const [paymentReceipts, setPaymentReceipts] = useState([]);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [activeSection, setActiveSection] = useState('inventory');
@@ -69,6 +71,49 @@ export default function SupplierDashboard() {
   useEffect(() => {
     fetchMyProducts();
   }, [fetchMyProducts]);
+
+  // Fetch payment receipts (transactions where this supplier sold materials)
+  const fetchPaymentReceipts = useCallback(async () => {
+    const storedToken = localStorage.getItem('token');
+    
+    if (!storedToken) {
+      console.warn("⚠️ No token found for fetching receipts.");
+      return;
+    }
+    
+    try {
+      console.log("🧾 Fetching payment receipts from:", `${API_URL}/supplier/receipts`);
+      
+      const response = await fetch(`${API_URL}/supplier/receipts`, { 
+        headers: { 
+          'Authorization': `Bearer ${storedToken}`,
+          'Accept': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text(); 
+        console.error(`❌ Server Error ${response.status}:`, errorText);
+        if (response.status === 401 || response.status === 403) {
+          handleLogout();
+        }
+        return;
+      }
+
+      const data = await response.json();
+      console.log("✅ Payment receipts received:", data);
+      
+      setPaymentReceipts(Array.isArray(data) ? data : (data.receipts || []));
+    } catch (err) {
+      console.error('❌ Fetch receipts error:', err);
+    }
+  }, []);
+
+  // Run fetch on mount
+  useEffect(() => {
+    fetchMyProducts();
+    fetchPaymentReceipts();
+  }, [fetchMyProducts, fetchPaymentReceipts]);
 
   const handleInputChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -221,6 +266,15 @@ export default function SupplierDashboard() {
               <Package size={20} />
               <span className="font-medium">Manage Materials</span>
             </button>
+            <button
+              onClick={() => setActiveSection('payments')}
+              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition ${
+                activeSection === 'payments' ? 'bg-blue-50 text-blue-600 shadow-sm' : 'text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              <Receipt size={20} />
+              <span className="font-medium">Payment Receipts</span>
+            </button>
           </nav>
         </div>
 
@@ -243,15 +297,19 @@ export default function SupplierDashboard() {
           <div className="p-8">
             <div className="flex justify-between items-center mb-8">
               <h2 className="text-3xl font-bold text-gray-900">
-                {activeSection === 'inventory' ? 'Inventory Overview' : 'Manage Materials'}
+                {activeSection === 'inventory' ? 'Inventory Overview' : 
+                 activeSection === 'materials' ? 'Manage Materials' : 
+                 'Payment Receipts'}
               </h2>
-              <button
-                onClick={() => setShowAddModal(true)}
-                className="flex items-center space-x-2 bg-blue-600 text-white px-6 py-3 rounded-xl font-semibold hover:bg-blue-700 transition shadow-lg"
-              >
-                <Plus size={20} />
-                <span>Add New Material</span>
-              </button>
+              {activeSection !== 'payments' && (
+                <button
+                  onClick={() => setShowAddModal(true)}
+                  className="flex items-center space-x-2 bg-blue-600 text-white px-6 py-3 rounded-xl font-semibold hover:bg-blue-700 transition shadow-lg"
+                >
+                  <Plus size={20} />
+                  <span>Add New Material</span>
+                </button>
+              )}
             </div>
 
             {/* Stats Cards */}
@@ -364,6 +422,160 @@ export default function SupplierDashboard() {
                   </tbody>
                 </table>
               </div>
+            )}
+
+            {/* Payment Receipts Section */}
+            {activeSection === 'payments' && (
+              <>
+                {/* Stats Summary */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                  <div className="bg-gradient-to-br from-green-50 to-emerald-50 p-6 rounded-2xl shadow-sm border border-green-100">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="p-3 bg-white rounded-xl shadow-sm">
+                        <Receipt className="text-green-600" size={24} />
+                      </div>
+                      <span className="text-3xl font-bold text-gray-900">{paymentReceipts.length}</span>
+                    </div>
+                    <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider">Total Receipts</h3>
+                  </div>
+
+                  <div className="bg-gradient-to-br from-blue-50 to-indigo-50 p-6 rounded-2xl shadow-sm border border-blue-100">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="p-3 bg-white rounded-xl shadow-sm">
+                        <DollarSign className="text-blue-600" size={24} />
+                      </div>
+                      <span className="text-3xl font-bold text-gray-900">
+                        ${paymentReceipts.reduce((sum, r) => sum + (r.amount || 0), 0).toFixed(2)}
+                      </span>
+                    </div>
+                    <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider">Total Revenue</h3>
+                  </div>
+
+                  <div className="bg-gradient-to-br from-purple-50 to-pink-50 p-6 rounded-2xl shadow-sm border border-purple-100">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="p-3 bg-white rounded-xl shadow-sm">
+                        <CheckCircle className="text-purple-600" size={24} />
+                      </div>
+                      <span className="text-3xl font-bold text-gray-900">
+                        {paymentReceipts.filter(r => r.status === 'completed').length}
+                      </span>
+                    </div>
+                    <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider">Completed Sales</h3>
+                  </div>
+                </div>
+
+                {/* Receipts Table */}
+                {paymentReceipts.length > 0 ? (
+                  <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left">
+                        <thead className="bg-gradient-to-r from-gray-50 to-gray-100 border-b border-gray-200">
+                          <tr>
+                            <th className="px-6 py-4 text-xs font-bold text-gray-600 uppercase tracking-widest">
+                              <div className="flex items-center space-x-2">
+                                <Package size={14} />
+                                <span>Product</span>
+                              </div>
+                            </th>
+                            <th className="px-6 py-4 text-xs font-bold text-gray-600 uppercase tracking-widest">
+                              <div className="flex items-center space-x-2">
+                                <User size={14} />
+                                <span>Buyer</span>
+                              </div>
+                            </th>
+                            <th className="px-6 py-4 text-xs font-bold text-gray-600 uppercase tracking-widest">
+                              <div className="flex items-center space-x-2">
+                                <DollarSign size={14} />
+                                <span>Amount</span>
+                              </div>
+                            </th>
+                            <th className="px-6 py-4 text-xs font-bold text-gray-600 uppercase tracking-widest">Quantity</th>
+                            <th className="px-6 py-4 text-xs font-bold text-gray-600 uppercase tracking-widest">
+                              <div className="flex items-center space-x-2">
+                                <Calendar size={14} />
+                                <span>Date</span>
+                              </div>
+                            </th>
+                            <th className="px-6 py-4 text-xs font-bold text-gray-600 uppercase tracking-widest">Status</th>
+                            <th className="px-6 py-4 text-xs font-bold text-gray-600 uppercase tracking-widest">Blockchain</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {paymentReceipts.map((receipt, idx) => (
+                            <tr key={receipt._id || idx} className="hover:bg-blue-50/30 transition-colors">
+                              <td className="px-6 py-4">
+                                <div className="font-bold text-gray-900">{receipt.productName}</div>
+                              </td>
+                              <td className="px-6 py-4">
+                                <div className="text-sm text-gray-700 font-medium">{receipt.buyerName}</div>
+                                <div className="text-xs text-gray-500">Manufacturer</div>
+                              </td>
+                              <td className="px-6 py-4">
+                                <div className="font-bold text-green-600 text-lg">${receipt.amount?.toFixed(2)}</div>
+                              </td>
+                              <td className="px-6 py-4">
+                                <div className="font-semibold text-gray-700">{receipt.quantity} units</div>
+                              </td>
+                              <td className="px-6 py-4">
+                                <div className="text-sm text-gray-600">
+                                  {new Date(receipt.timestamp).toLocaleDateString('en-US', { 
+                                    month: 'short', 
+                                    day: 'numeric', 
+                                    year: 'numeric' 
+                                  })}
+                                </div>
+                                <div className="text-xs text-gray-400">
+                                  {new Date(receipt.timestamp).toLocaleTimeString('en-US', { 
+                                    hour: '2-digit', 
+                                    minute: '2-digit' 
+                                  })}
+                                </div>
+                              </td>
+                              <td className="px-6 py-4">
+                                <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-bold ${
+                                  receipt.status === 'completed' 
+                                    ? 'bg-green-100 text-green-700 border border-green-200' 
+                                    : receipt.status === 'pending'
+                                    ? 'bg-yellow-100 text-yellow-700 border border-yellow-200'
+                                    : 'bg-red-100 text-red-700 border border-red-200'
+                                }`}>
+                                  {receipt.status === 'completed' && <CheckCircle size={12} className="mr-1" />}
+                                  {receipt.status?.toUpperCase()}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4">
+                                {receipt.txHash && (
+                                  <a
+                                    href={`https://etherscan.io/tx/${receipt.txHash}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="flex items-center space-x-2 text-blue-600 hover:text-blue-800 transition group"
+                                  >
+                                    <div className="flex items-center space-x-1 bg-blue-50 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition">
+                                      <ExternalLink size={14} />
+                                      <span className="text-xs font-medium">View TX</span>
+                                    </div>
+                                  </a>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-white p-20 rounded-3xl border-2 border-dashed border-gray-200 text-center">
+                    <Receipt className="mx-auto text-gray-300 mb-6" size={64} />
+                    <h3 className="text-2xl font-bold text-gray-900 mb-2">No Payment Receipts Yet</h3>
+                    <p className="text-gray-500 mb-6">When manufacturers purchase your materials, payment receipts will appear here.</p>
+                    <div className="inline-flex items-center space-x-2 px-6 py-3 bg-blue-50 text-blue-600 rounded-lg font-medium">
+                      <CheckCircle size={20} />
+                      <span>All transactions are verified on blockchain</span>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
 
             {/* Empty State */}
