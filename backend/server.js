@@ -1,3 +1,4 @@
+
 const express = require('express');
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
@@ -170,6 +171,7 @@ const manufacturedProductSchema = new mongoose.Schema({
   description: { type: String, required: true },
   price: { type: Number, required: true },
   quantity: { type: Number, required: true },
+  image: { type: String, required: true },
   materialId: { 
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'Transaction',
@@ -315,11 +317,14 @@ apiRouter.post(
         return res.status(400).json({ message: 'Image is required' });
       }
 
+      // Log the Cloudinary image URL
+      console.log('📸 Image uploaded to Cloudinary:', req.file.path);
+
       const product = new Product({
         name,
         quantity,
         price,
-        image: req.file.path,
+        image: req.file.path, // This should be the Cloudinary URL
         supplierId: user._id,
         supplierName: user.name,
         company: user.company
@@ -370,7 +375,10 @@ apiRouter.put(
 
       console.log('✏️ Updating product:', req.params.id);
 
-      if (req.file) updateData.image = req.file.path;
+      if (req.file) {
+        updateData.image = req.file.path;
+        console.log('📸 Updated image:', req.file.path);
+      }
 
       const product = await Product.findOneAndUpdate(
         { _id: req.params.id, supplierId: req.user.id },
@@ -504,6 +512,12 @@ apiRouter.get(
           quantity: { $gt: 0 }
         }).sort({ createdAt: -1 });
         console.log(`✅ Customer ${req.user.email}: ${products.length} available products`);
+        
+        // Log image URLs for debugging
+        products.forEach(p => {
+          console.log(`   Product: ${p.name}, Image: ${p.image}`);
+        });
+        
         return res.json(products);
       }
       
@@ -545,6 +559,7 @@ apiRouter.post(
       }
 
       console.log(`✅ Found product: "${product.name}" (ID: ${product._id})`);
+      console.log(`📸 Product image URL: ${product.image}`);
       
       // Check stock
       if (product.quantity < quantity) {
@@ -617,17 +632,18 @@ apiRouter.post(
         supplierName: seller.name,
         quantity: quantity,
         price: product.price,
-        image: product.image,
+        image: product.image, // Copy the image from original product
         txHash: externalTxHash,
         status: 'available',
         purchasedAt: new Date()
       });
-      console.log(`✅ PurchasedMaterial record created`);
+      console.log(`✅ PurchasedMaterial record created with image: ${product.image}`);
 
-      // Auto-create manufactured product
-      await ManufacturedProduct.create({
-        name: `${product.name} - Manufactured`,
-        description: 'Auto-created after raw material purchase',
+      // Auto-create manufactured product WITH THE SAME IMAGE
+      const manufacturedProduct = await ManufacturedProduct.create({
+        name: product.name, // Use the exact same name, no "Auto-created" text
+        image: product.image, // Use the exact same image from original product
+        description: `Manufactured from high-quality ${product.name}`,
         price: product.price * 2,
         quantity: quantity,
         materialId: transaction._id,
@@ -637,11 +653,12 @@ apiRouter.post(
         txHash: externalTxHash,
         status: 'active'
       });
-      console.log(`✅ ManufacturedProduct auto-created`);
+      console.log(`✅ ManufacturedProduct auto-created with image: ${manufacturedProduct.image}`);
 
       console.log('🎉 PURCHASE COMPLETE:', {
         product: product.name,
         productId: product._id,
+        image: product.image,
         buyer: buyer.email,
         seller: seller.email,
         txHash: externalTxHash
@@ -747,6 +764,7 @@ apiRouter.post(
         description,
         price: parseFloat(price),
         quantity: parseInt(quantity),
+        image: material.image, // Use the image from purchased material
         materialId: material._id,
         manufacturerId: manufacturer._id,
         manufacturerName: manufacturer.name,
@@ -759,6 +777,7 @@ apiRouter.post(
 
       console.log('✅ Product created:', {
         name,
+        image: material.image,
         manufacturer: manufacturer.email,
         txHash: externalTxHash
       });
@@ -1022,6 +1041,7 @@ apiRouter.get('/debug/products', authenticateToken, async (req, res) => {
       products: allProducts.map(p => ({
         id: p._id,
         name: p.name,
+        image: p.image,
         supplierId: p.supplierId,
         supplierName: p.supplierName,
         quantity: p.quantity
@@ -1041,6 +1061,8 @@ apiRouter.get('/debug/manufactured-products', authenticateToken, async (req, res
       products: products.map(p => ({
         id: p._id,
         name: p.name,
+        image: p.image,
+        description: p.description,
         manufacturerId: p.manufacturerId,
         manufacturerName: p.manufacturerName,
         quantity: p.quantity,
@@ -1062,6 +1084,7 @@ apiRouter.get('/debug/purchased-materials', authenticateToken, async (req, res) 
         id: m._id,
         productId: m.productId,
         productName: m.productName,
+        image: m.image,
         manufacturerId: m.manufacturerId,
         manufacturerName: m.manufacturerName,
         supplierName: m.supplierName,
@@ -1097,6 +1120,7 @@ apiRouter.get('/debug/manufacturer-purchased/:manufacturerId', authenticateToken
         id: p._id,
         productId: p.productId?.toString(),
         productName: p.productName,
+        image: p.image,
         txHash: p.txHash
       })),
       manufacturerId: req.params.manufacturerId,
@@ -1134,8 +1158,38 @@ apiRouter.get('/debug/check-purchase/:manufacturerId/:productId', authenticateTo
       } : null,
       purchasedMaterial: purchasedMaterial ? {
         id: purchasedMaterial._id,
+        image: purchasedMaterial.image,
         status: purchasedMaterial.status
       } : null
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Debug: Check product images
+apiRouter.get('/debug/product-images', authenticateToken, async (req, res) => {
+  try {
+    const rawProducts = await Product.find();
+    const manufacturedProducts = await ManufacturedProduct.find();
+    
+    res.json({
+      rawProducts: rawProducts.map(p => ({
+        id: p._id,
+        name: p.name,
+        image: p.image,
+        imageType: typeof p.image,
+        hasImage: !!p.image
+      })),
+      manufacturedProducts: manufacturedProducts.map(p => ({
+        id: p._id,
+        name: p.name,
+        image: p.image,
+        imageType: typeof p.image,
+        hasImage: !!p.image,
+        originalProductId: p.materialId,
+        description: p.description
+      }))
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

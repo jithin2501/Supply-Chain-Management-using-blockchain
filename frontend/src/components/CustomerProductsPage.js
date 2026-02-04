@@ -3,7 +3,7 @@ import {
   ShoppingBag, Package, Wallet, LogOut, CheckCircle2, 
   ArrowRight, Link as LinkIcon, Clock, AlertCircle, RefreshCw,
   ShieldCheck, Database, CheckCircle, Search, Filter,
-  ShoppingCart, Factory, ArrowLeft, Users, Tag
+  ShoppingCart, Factory, ArrowLeft, Users, Tag, Eye, X
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -41,7 +41,8 @@ export default function CustomerProductsPage() {
   const [lastTx, setLastTx] = useState(null);
   const [isMetaMaskInstalled, setIsMetaMaskInstalled] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
-  const [forceReconnect, setForceReconnect] = useState(false);
+  const [viewImage, setViewImage] = useState(null);
+  // Removed debugInfo since it's not used
 
   const token = localStorage.getItem('token');
   const user = JSON.parse(localStorage.getItem('user') || '{}');
@@ -142,7 +143,6 @@ export default function CustomerProductsPage() {
         const connectedAccount = accounts[0];
         setAccount(connectedAccount);
         localStorage.setItem(`wallet_${user._id}`, connectedAccount);
-        setForceReconnect(false);
       }
     } catch (err) {
       console.error("Wallet connection failed:", err);
@@ -272,34 +272,6 @@ export default function CustomerProductsPage() {
     }
   };
 
-  // Alternative method: Use eth_selectAccounts (if available)
-  const selectAccount = async () => {
-    if (!window.ethereum) return;
-    
-    try {
-      // Check if eth_selectAccounts is supported
-      if (window.ethereum._metamask && window.ethereum._metamask.isUnlocked) {
-        // Try the newer selectAccounts method
-        const accounts = await window.ethereum.request({
-          method: 'eth_selectAccounts',
-          params: [{}]
-        });
-        
-        if (accounts && accounts.length > 0) {
-          setAccount(accounts[0]);
-          localStorage.setItem(`wallet_${user._id}`, accounts[0]);
-        }
-      } else {
-        // Fall back to requesting accounts
-        await switchAccount();
-      }
-    } catch (err) {
-      console.error("Error selecting account:", err);
-      // Fall back to regular connection
-      await connectWallet();
-    }
-  };
-
   const fetchProducts = useCallback(async () => {
     setLoading(true);
     try {
@@ -308,14 +280,24 @@ export default function CustomerProductsPage() {
       });
       const data = await response.json();
       
-      // Filter to show only manufactured products (products with manufacturerId)
+      // Debug: Log the products data
+      console.log('📦 Products data received:', data);
+      if (Array.isArray(data)) {
+        data.forEach((product, index) => {
+          console.log(`   Product ${index + 1}: ${product.name}, Image: ${product.image}, Has Image: ${!!product.image}`);
+        });
+      }
+      
+      // Get manufactured products (products with manufacturerId)
       const manufacturedProducts = Array.isArray(data) 
         ? data.filter(product => product.manufacturerId || product.manufacturerName) 
         : [];
       
+      console.log(`✅ Found ${manufacturedProducts.length} manufactured products`);
       setProducts(manufacturedProducts);
+      
     } catch (err) {
-      console.error('Error loading products:', err);
+      console.error('❌ Error loading products:', err);
     } finally {
       setLoading(false);
     }
@@ -619,6 +601,14 @@ export default function CustomerProductsPage() {
           )}
         </div>
 
+        {/* Debug Button (Remove in production) */}
+        <button
+          onClick={() => fetchProducts()}
+          className="mb-4 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-300"
+        >
+          Debug: Refresh Products
+        </button>
+
         {/* Products Grid */}
         {loading ? (
           <div className="flex items-center justify-center h-64">
@@ -627,44 +617,90 @@ export default function CustomerProductsPage() {
         ) : filteredProducts.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
             {filteredProducts.map(product => (
-              <div key={product._id} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hover:shadow-lg transition-all duration-300">
-                <div className="p-6">
-                  {/* Product Name/Number */}
-                  <div className="mb-3">
-                    <h4 className="text-xl font-bold text-gray-900">{product.name}</h4>
-                    <p className="text-sm text-gray-500 mt-1">{product.company || product.manufacturerName}</p>
+              <div key={product._id} className="bg-white rounded-2xl shadow-lg overflow-hidden hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-1">
+                {/* Product Image with View Button */}
+                <div className="relative h-56 overflow-hidden bg-gradient-to-br from-gray-100 to-gray-200">
+                  {product.image ? (
+                    <>
+                      <img 
+                        src={product.image} 
+                        alt={product.name}
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          e.target.onerror = null;
+                          e.target.src = 'https://via.placeholder.com/400x300?text=Image+Not+Available';
+                        }}
+                      />
+                      <button
+                        onClick={() => setViewImage(product.image)}
+                        className="absolute top-3 left-3 p-2 bg-black/50 text-white rounded-lg hover:bg-black/70 transition"
+                        title="View Full Image"
+                      >
+                        <Eye size={16} />
+                      </button>
+                    </>
+                  ) : (
+                    <div className="w-full h-full flex flex-col items-center justify-center">
+                      <Package className="text-gray-400 mb-2" size={48} />
+                      <span className="text-gray-500 text-sm">No image available</span>
+                    </div>
+                  )}
+                  {/* Stock Badge */}
+                  <div className="absolute top-4 right-4">
+                    <span className={`px-3 py-1.5 rounded-full text-xs font-bold shadow-lg ${
+                      product.quantity > 0 
+                        ? 'bg-green-500 text-white' 
+                        : 'bg-red-500 text-white'
+                    }`}>
+                      {product.quantity > 0 ? `${product.quantity} in stock` : 'Out of stock'}
+                    </span>
                   </div>
+                </div>
 
-                  {/* Description */}
-                  <p className="text-xs text-gray-500 mb-4 italic">
-                    {product.description || "Auto-created after raw material purchase"}
+                {/* Product Details */}
+                <div className="p-6">
+                  {/* Product Name */}
+                  <h4 className="text-2xl font-bold text-gray-900 mb-2 line-clamp-1">
+                    {product.name}
+                  </h4>
+
+                  {/* Company Name */}
+                  <p className="text-sm text-gray-600 font-medium mb-4">
+                    {product.company || product.manufacturerName || "Unknown Company"}
                   </p>
 
+                  {/* Description */}
+                  {product.description && (
+                    <p className="text-sm text-gray-600 mb-4 line-clamp-2">
+                      {product.description}
+                    </p>
+                  )}
+
                   {/* Manufacturer Section */}
-                  <div className="mb-4">
+                  <div className="mb-4 pb-4 border-b border-gray-100">
                     <div className="flex items-center space-x-2 mb-1">
                       <Users size={14} className="text-gray-400" />
                       <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">MANUFACTURER</span>
                     </div>
                     <p className="text-sm font-semibold text-gray-900">
-                      {product.manufacturerName || product.company || "Unknown Manufacturer"}
+                      {product.manufacturerName || product.company || "Manufacturer"}
                     </p>
                   </div>
 
                   {/* Price and Stock Section */}
-                  <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center justify-between mb-6">
                     <div>
                       <div className="flex items-center space-x-2 mb-1">
                         <Tag size={14} className="text-gray-400" />
                         <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">PRICE</span>
                       </div>
-                      <p className="text-2xl font-black text-gray-900">${product.price}</p>
+                      <p className="text-3xl font-black text-gray-900">${product.price}</p>
                     </div>
                     
                     <div className="text-right">
                       <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">IN STOCK</div>
-                      <p className={`text-lg font-bold ${product.quantity > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        {product.quantity} <span className="text-sm">in stock</span>
+                      <p className={`text-2xl font-black ${product.quantity > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        {product.quantity}
                       </p>
                     </div>
                   </div>
@@ -673,14 +709,14 @@ export default function CustomerProductsPage() {
                   <button 
                     onClick={() => handleBuyProduct(product)}
                     disabled={!account || product.quantity === 0}
-                    className={`w-full py-3 rounded-xl font-bold flex items-center justify-center space-x-2 transition ${
+                    className={`w-full py-3.5 rounded-xl font-bold flex items-center justify-center space-x-2 transition-all shadow-md ${
                       !account || product.quantity === 0 
                         ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
-                        : 'bg-blue-600 text-white hover:bg-blue-700'
+                        : 'bg-blue-600 text-white hover:bg-blue-700 hover:shadow-xl'
                     }`}
                   >
-                    <span>Buy</span>
-                    <ArrowRight size={18} />
+                    <span>{!account ? 'Connect Wallet' : product.quantity === 0 ? 'Out of Stock' : 'Buy Now'}</span>
+                    {account && product.quantity > 0 && <ArrowRight size={18} />}
                   </button>
                 </div>
               </div>
@@ -689,7 +725,8 @@ export default function CustomerProductsPage() {
         ) : (
           <div className="bg-white p-12 rounded-2xl border-2 border-dashed border-gray-200 text-center">
             <Factory className="mx-auto text-gray-300 mb-4" size={64} />
-            <p className="text-gray-600">No products available yet. Manufacturers are creating blockchain-verified products.</p>
+            <p className="text-gray-600 text-lg mb-2">No products available yet</p>
+            <p className="text-gray-500 mb-6">Manufacturers are creating blockchain-verified products.</p>
             <button
               onClick={() => {
                 setSearchTerm('');
@@ -768,6 +805,28 @@ export default function CustomerProductsPage() {
           )}
         </div>
       </div>
+
+      {/* Image View Modal */}
+      {viewImage && (
+        <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-[150] p-4">
+          <div className="relative max-w-4xl max-h-[90vh]">
+            <button
+              onClick={() => setViewImage(null)}
+              className="absolute -top-10 right-0 p-2 text-white hover:text-gray-300"
+            >
+              <X size={24} />
+            </button>
+            <img 
+              src={viewImage} 
+              alt="Product full view"
+              className="max-w-full max-h-[80vh] object-contain rounded-lg"
+            />
+            <div className="mt-2 text-center text-white text-sm">
+              Click outside image to close
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Blockchain Transaction Modal */}
       {txStatus && (

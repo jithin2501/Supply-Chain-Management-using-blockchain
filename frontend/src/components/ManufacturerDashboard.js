@@ -561,7 +561,7 @@ export default function ManufacturerDashboard() {
             </button>
           )}
           <h2 className="text-3xl font-bold text-gray-900">
-            {activeTab === 'marketplace' ? (selectedSupplier ? selectedSupplier.company : 'Supplier Marketplace') : 'Blockchain Transaction Ledger'}
+            {activeTab === 'marketplace' ? (selectedSupplier && selectedSupplier.company ? selectedSupplier.company : 'Supplier Marketplace') : 'Blockchain Transaction Ledger'}
           </h2>
           <p className="text-gray-500">
             {activeTab === 'marketplace' ? 'Real-time Web3 sourcing with MetaMask integration.' : 'Immutable history of verified blockchain transactions.'}
@@ -655,7 +655,7 @@ export default function ManufacturerDashboard() {
                 </div>
               ) : (
                 <div className="animate-in slide-in-from-bottom-4 duration-500">
-                  {selectedSupplier.items.length === 0 ? (
+                  {!selectedSupplier || !selectedSupplier.items || selectedSupplier.items.length === 0 ? (
                     <div className="text-center py-16">
                       <div className="w-24 h-24 bg-orange-50 rounded-full flex items-center justify-center mx-auto mb-6">
                         <AlertCircle className="text-orange-600" size={48} />
@@ -672,10 +672,10 @@ export default function ManufacturerDashboard() {
                   ) : (
                     <>
                       <div className="mb-4 text-sm text-gray-600">
-                        Showing {selectedSupplier.items.length} materials from {selectedSupplier.company}
+                        Showing {selectedSupplier && selectedSupplier.items ? selectedSupplier.items.length : 0} materials from {selectedSupplier && selectedSupplier.company ? selectedSupplier.company : 'Unknown Supplier'}
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        {selectedSupplier.items.map(item => (
+                        {selectedSupplier && selectedSupplier.items && selectedSupplier.items.map(item => (
                           <div key={item._id} className="bg-white rounded-3xl shadow-sm border overflow-hidden hover:shadow-lg transition">
                             <img src={item.image} className="w-full h-48 object-cover" alt="" />
                             <div className="p-6">

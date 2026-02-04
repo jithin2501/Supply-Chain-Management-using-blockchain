@@ -225,20 +225,6 @@ export default function MainWebsite() {
             </div>
             {user ? (
               <div className="flex items-center space-x-4">
-                {user.role === 'customers' && account && (
-                  <div className="flex items-center space-x-2">
-                    <div className="text-right hidden sm:block">
-                      <div className="text-xs text-gray-500">Wallet Connected</div>
-                      <div className="text-[10px] font-mono text-green-600 truncate">{account.substring(0, 10)}...</div>
-                    </div>
-                    <button
-                      onClick={disconnectWallet}
-                      className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
-                    >
-                      <LogOut size={18} />
-                    </button>
-                  </div>
-                )}
                 <div className="text-right hidden sm:block">
                   <div className="font-semibold text-gray-900">{user.name}</div>
                   <div className="text-sm text-gray-600 capitalize">{user.role}</div>
