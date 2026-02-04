@@ -29,6 +29,7 @@ function LoaderCircle({ size = 24, className = "" }) {
 export default function ManufacturerDashboard() {
   const [materials, setMaterials] = useState([]);
   const [purchases, setPurchases] = useState([]);
+  const [purchasedMaterials, setPurchasedMaterials] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('marketplace');
   const [selectedSupplierId, setSelectedSupplierId] = useState(null);
@@ -321,13 +322,31 @@ export default function ManufacturerDashboard() {
     }
   }, [token]);
 
+  const fetchPurchasedMaterials = useCallback(async () => {
+    setLoading(true);
+    try {
+      const response = await fetch(`${API_URL}/manufacturer/purchased-materials`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await response.json();
+      console.log('📦 Purchased Materials:', data);
+      setPurchasedMaterials(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Error loading purchased materials:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [token]);
+
   useEffect(() => {
     if (activeTab === 'marketplace') {
       fetchMaterials();
+    } else if (activeTab === 'purchased') {
+      fetchPurchasedMaterials();
     } else {
       fetchPurchases();
     }
-  }, [activeTab, fetchMaterials, fetchPurchases]);
+  }, [activeTab, fetchMaterials, fetchPurchases, fetchPurchasedMaterials]);
 
   const handleBuy = async (product) => {
     if (!account) {
@@ -468,6 +487,13 @@ export default function ManufacturerDashboard() {
               <span>Marketplace</span>
             </button>
             <button 
+              onClick={() => setActiveTab('purchased')} 
+              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition font-medium ${activeTab === 'purchased' ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-600 hover:bg-gray-50'}`}
+            >
+              <Package size={20} />
+              <span>Purchased Materials</span>
+            </button>
+            <button 
               onClick={() => setActiveTab('orders')} 
               className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition font-medium ${activeTab === 'orders' ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-600 hover:bg-gray-50'}`}
             >
@@ -561,10 +587,10 @@ export default function ManufacturerDashboard() {
             </button>
           )}
           <h2 className="text-3xl font-bold text-gray-900">
-            {activeTab === 'marketplace' ? (selectedSupplier && selectedSupplier.company ? selectedSupplier.company : 'Supplier Marketplace') : 'Blockchain Transaction Ledger'}
+            {activeTab === 'marketplace' ? (selectedSupplier && selectedSupplier.company ? selectedSupplier.company : 'Supplier Marketplace') : activeTab === 'purchased' ? 'Purchased Materials' : 'Blockchain Transaction Ledger'}
           </h2>
           <p className="text-gray-500">
-            {activeTab === 'marketplace' ? 'Real-time Web3 sourcing with MetaMask integration.' : 'Immutable history of verified blockchain transactions.'}
+            {activeTab === 'marketplace' ? 'Real-time Web3 sourcing with MetaMask integration.' : activeTab === 'purchased' ? 'Materials you have purchased from suppliers.' : 'Immutable history of verified blockchain transactions.'}
           </p>
 
           {/* Connection Status Banner */}
@@ -701,6 +727,85 @@ export default function ManufacturerDashboard() {
                   )}
                 </div>
               )
+            ) : activeTab === 'purchased' ? (
+              /* Purchased Materials View */
+              <div className="animate-in fade-in duration-500">
+                {purchasedMaterials.length === 0 ? (
+                  <div className="bg-white rounded-[32px] shadow-sm border border-gray-200 p-16 text-center">
+                    <div className="w-24 h-24 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-6">
+                      <Package className="text-gray-400" size={48} />
+                    </div>
+                    <h3 className="text-2xl font-bold text-gray-900 mb-2">No Purchased Materials</h3>
+                    <p className="text-gray-500 mb-8">You haven't purchased any materials yet. Visit the marketplace to buy materials.</p>
+                    <button 
+                      onClick={() => setActiveTab('marketplace')} 
+                      className="px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition"
+                    >
+                      Go to Marketplace
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    {purchasedMaterials.map(material => (
+                      <div key={material._id} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden hover:shadow-lg transition">
+                        <div className="relative">
+                          <img src={material.image} className="w-full h-48 object-cover" alt={material.productName} />
+                          <div className="absolute top-3 right-3">
+                            <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                              material.status === 'available' 
+                                ? 'bg-green-500 text-white' 
+                                : material.status === 'used'
+                                ? 'bg-gray-500 text-white'
+                                : 'bg-blue-500 text-white'
+                            }`}>
+                              {material.status.charAt(0).toUpperCase() + material.status.slice(1)}
+                            </span>
+                          </div>
+                        </div>
+                        
+                        <div className="p-6">
+                          <h4 className="text-lg font-bold text-gray-900 mb-2">{material.productName}</h4>
+                          
+                          <div className="space-y-2 mb-4">
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-gray-500 font-medium">Supplier</span>
+                              <span className="text-gray-900 font-bold">{material.supplierName}</span>
+                            </div>
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-gray-500 font-medium">Quantity</span>
+                              <span className="text-gray-900 font-bold">{material.quantity}</span>
+                            </div>
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-gray-500 font-medium">Price Paid</span>
+                              <span className="text-gray-900 font-bold">${material.price}</span>
+                            </div>
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-gray-500 font-medium">Purchased</span>
+                              <span className="text-gray-500 text-xs">
+                                {new Date(material.purchasedAt).toLocaleDateString()}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="pt-4 border-t border-gray-100">
+                            <a 
+                              href={`https://etherscan.io/tx/${material.txHash}`} 
+                              target="_blank" 
+                              rel="noreferrer"
+                              className="flex items-center justify-center space-x-2 text-indigo-600 hover:text-indigo-700 text-sm font-medium"
+                            >
+                              <LinkIcon size={14} />
+                              <span className="font-mono text-xs">
+                                {material.txHash?.substring(0, 10)}...{material.txHash?.substring(material.txHash.length - 8)}
+                              </span>
+                            </a>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             ) : (
               /* Ledger View */
               <div className="bg-white rounded-[32px] shadow-sm border border-gray-200 overflow-hidden animate-in fade-in duration-500">

@@ -816,9 +816,10 @@ apiRouter.get(
   async (req, res) => {
     try {
       const purchasedMaterials = await PurchasedMaterial.find({ 
-        manufacturerId: req.user.id,
-        status: 'available'
+        manufacturerId: req.user.id
       }).sort({ purchasedAt: -1 });
+      
+      console.log(`📦 Purchased materials for ${req.user.email}: ${purchasedMaterials.length} items`);
       
       res.json(purchasedMaterials);
     } catch (err) {
