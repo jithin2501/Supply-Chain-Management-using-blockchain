@@ -99,6 +99,7 @@ const productSchema = new mongoose.Schema({
   name: { type: String, required: true },
   description: { type: String, default: '' },
   quantity: { type: Number, required: true },
+  unit: { type: String, default: 'pieces' }, // Unit of measurement
   price: { type: Number, required: true }, // Price in INR
   image: { type: String, required: true },
   
@@ -329,10 +330,10 @@ apiRouter.post(
   upload.single('image'),
   async (req, res) => {
     try {
-      const { name, quantity, price, description, lat, lng, address } = req.body;
+      const { name, quantity, price, unit, description, lat, lng, address } = req.body;
       const user = await User.findById(req.user.id);
 
-      console.log('📦 Adding product:', { name, quantity, price, supplierId: user._id });
+      console.log('📦 Adding product:', { name, quantity, unit, price, supplierId: user._id });
 
       if (!req.file) {
         console.log('❌ No image uploaded');
@@ -350,6 +351,7 @@ apiRouter.post(
         name,
         description: description || '',
         quantity: parseInt(quantity),
+        unit: unit || 'pieces',
         price: parseFloat(price), // Store in INR
         image: req.file.path,
         location: {
@@ -402,10 +404,11 @@ apiRouter.put(
   upload.single('image'),
   async (req, res) => {
     try {
-      const { name, quantity, price, description, lat, lng, address } = req.body;
+      const { name, quantity, price, unit, description, lat, lng, address } = req.body;
       const updateData = { 
         name, 
         quantity: parseInt(quantity), 
+        unit: unit || 'pieces',
         price: parseFloat(price),
         description: description || ''
       };

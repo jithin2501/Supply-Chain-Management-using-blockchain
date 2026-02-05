@@ -24,7 +24,11 @@ export default function SupplierDashboard() {
   const [formData, setFormData] = useState({
     name: '',
     quantity: '',
-    price: ''
+    price: '',
+    unit: 'pieces',
+    lat: '',
+    lng: '',
+    address: ''
   });
 
   // Fetch only the products belonging to this supplier
@@ -174,12 +178,25 @@ export default function SupplierDashboard() {
     
     if (!image) return alert('Please upload an image');
     
+    // Debug log
+    console.log('Form Data:', formData);
+    
+    if (!formData.lat || !formData.lng || !formData.address) {
+      console.log('Missing location:', { lat: formData.lat, lng: formData.lng, address: formData.address });
+      return alert('Please provide complete location information:\n- Latitude\n- Longitude\n- Address');
+    }
+    
     setLoading(true);
     const data = new FormData();
     data.append('name', formData.name);
     data.append('quantity', formData.quantity);
     data.append('price', formData.price);
+    data.append('unit', formData.unit);
     data.append('image', image);
+    // Send location as separate fields, not JSON
+    data.append('lat', formData.lat);
+    data.append('lng', formData.lng);
+    data.append('address', formData.address);
 
     try {
       const response = await fetch(`${API_URL}/products`, {
@@ -196,7 +213,7 @@ export default function SupplierDashboard() {
         setProducts(prev => [newProduct, ...prev]);
         
         setShowAddModal(false);
-        setFormData({ name: '', quantity: '', price: '' });
+        setFormData({ name: '', quantity: '', price: '', unit: 'pieces', lat: '', lng: '', address: '' });
         setImage(null);
         
         // Refresh full list from server to ensure database sync
@@ -217,11 +234,20 @@ export default function SupplierDashboard() {
     e.preventDefault();
     const storedToken = localStorage.getItem('token');
     
+    if (!formData.lat || !formData.lng || !formData.address) {
+      return alert('Please provide location information (latitude, longitude, and address)');
+    }
+    
     setLoading(true);
     const data = new FormData();
     data.append('name', formData.name);
     data.append('quantity', formData.quantity);
     data.append('price', formData.price);
+    data.append('unit', formData.unit);
+    // Send location as separate fields, not JSON
+    data.append('lat', formData.lat);
+    data.append('lng', formData.lng);
+    data.append('address', formData.address);
     if (image) data.append('image', image);
 
     try {
@@ -299,7 +325,11 @@ export default function SupplierDashboard() {
     setFormData({
       name: product.name,
       quantity: product.quantity,
-      price: product.price
+      price: product.price,
+      unit: product.unit || 'pieces',
+      lat: product.location?.lat?.toString() || '',
+      lng: product.location?.lng?.toString() || '',
+      address: product.location?.address || ''
     });
     setShowEditModal(true);
   };
@@ -385,7 +415,11 @@ export default function SupplierDashboard() {
               </h2>
               {(activeSection === 'materials' || activeSection === 'inventory') && (
                 <button
-                  onClick={() => setShowAddModal(true)}
+                  onClick={() => {
+                    setFormData({ name: '', quantity: '', price: '', unit: 'pieces', lat: '', lng: '', address: '' });
+                    setImage(null);
+                    setShowAddModal(true);
+                  }}
                   className="flex items-center space-x-2 bg-blue-600 text-white px-6 py-3 rounded-xl font-semibold hover:bg-blue-700 transition shadow-lg"
                 >
                   <Plus size={20} />
@@ -426,7 +460,7 @@ export default function SupplierDashboard() {
                         <Truck className="text-purple-600" size={24} />
                       </div>
                       <span className="text-3xl font-bold text-gray-900">
-                        ${availableProducts.reduce((sum, p) => sum + (Number(p.price) * Number(p.quantity)), 0).toFixed(2)}
+                        ₹{availableProducts.reduce((sum, p) => sum + (Number(p.price) * Number(p.quantity)), 0).toFixed(2)}
                       </span>
                     </div>
                     <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Total Inventory Value</h3>
@@ -441,10 +475,10 @@ export default function SupplierDashboard() {
                         <h3 className="text-xl font-bold text-gray-900 mb-2">{product.name}</h3>
                         <div className="space-y-2 mb-4">
                           <p className="text-sm text-gray-600">
-                            Stock: <span className="font-semibold text-gray-900">{product.quantity} units</span>
+                            Stock: <span className="font-semibold text-gray-900">{product.quantity} {product.unit || 'units'}</span>
                           </p>
                           <p className="text-sm text-gray-600">
-                            Price: <span className="font-semibold text-gray-900">${product.price}</span>
+                            Price: <span className="font-semibold text-green-600">₹{product.price}</span> <span className="text-xs text-gray-500">per {product.unit || 'unit'}</span>
                           </p>
                         </div>
                         <div className="flex gap-2">
@@ -489,8 +523,8 @@ export default function SupplierDashboard() {
                           <img src={product.image} className="w-12 h-12 rounded-xl object-cover" alt="" />
                           <div className="font-bold text-gray-900">{product.name}</div>
                         </td>
-                        <td className="px-6 py-4 font-semibold text-gray-600">{product.quantity} units</td>
-                        <td className="px-6 py-4 font-bold text-gray-900">${product.price}</td>
+                        <td className="px-6 py-4 font-semibold text-gray-600">{product.quantity} {product.unit || 'units'}</td>
+                        <td className="px-6 py-4 font-bold text-green-600">₹{product.price}</td>
                         <td className="px-6 py-4 text-right space-x-2">
                           <button onClick={() => openEditModal(product)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg">
                             <Edit size={18} />
@@ -539,7 +573,7 @@ export default function SupplierDashboard() {
                         <DollarSign className="text-emerald-600" size={24} />
                       </div>
                       <span className="text-3xl font-bold text-gray-900">
-                        ${purchasedMaterials.reduce((sum, m) => sum + (m.price * m.quantity), 0).toFixed(2)}
+                        ₹{purchasedMaterials.reduce((sum, m) => sum + (m.price * m.quantity), 0).toFixed(2)}
                       </span>
                     </div>
                     <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider">Total Value Sold</h3>
@@ -570,15 +604,15 @@ export default function SupplierDashboard() {
                             </div>
                             <div className="flex items-center justify-between text-sm">
                               <span className="text-gray-600">Quantity Sold:</span>
-                              <span className="font-bold text-gray-900">{material.quantity} units</span>
+                              <span className="font-bold text-gray-900">{material.quantity} {material.unit || "units"}</span>
                             </div>
                             <div className="flex items-center justify-between text-sm">
                               <span className="text-gray-600">Price per Unit:</span>
-                              <span className="font-bold text-gray-900">${material.price}</span>
+                              <span className="font-bold text-gray-900">₹{material.price}</span>
                             </div>
                             <div className="flex items-center justify-between text-sm">
                               <span className="text-gray-600">Total Amount:</span>
-                              <span className="font-bold text-green-600 text-lg">${(material.price * material.quantity).toFixed(2)}</span>
+                              <span className="font-bold text-green-600 text-lg">₹{(material.price * material.quantity).toFixed(2)}</span>
                             </div>
                             <div className="flex items-center justify-between text-sm pt-2 border-t border-gray-100">
                               <span className="text-gray-600">Date Purchased:</span>
@@ -642,7 +676,7 @@ export default function SupplierDashboard() {
                         <DollarSign className="text-blue-600" size={24} />
                       </div>
                       <span className="text-3xl font-bold text-gray-900">
-                        ${paymentReceipts.reduce((sum, r) => sum + (r.amount || 0), 0).toFixed(2)}
+                        ₹{paymentReceipts.reduce((sum, r) => sum + (r.amount || 0), 0).toFixed(2)}
                       </span>
                     </div>
                     <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider">Total Revenue</h3>
@@ -709,10 +743,10 @@ export default function SupplierDashboard() {
                                 <div className="text-xs text-gray-500">Manufacturer</div>
                               </td>
                               <td className="px-6 py-4">
-                                <div className="font-bold text-green-600 text-lg">${receipt.amount?.toFixed(2)}</div>
+                                <div className="font-bold text-green-600 text-lg">₹{receipt.amount?.toFixed(2)}</div>
                               </td>
                               <td className="px-6 py-4">
-                                <div className="font-semibold text-gray-700">{receipt.quantity} units</div>
+                                <div className="font-semibold text-gray-700">{receipt.quantity} {receipt.unit || "units"}</div>
                               </td>
                               <td className="px-6 py-4">
                                 <div className="text-sm text-gray-600">
@@ -815,9 +849,14 @@ export default function SupplierDashboard() {
       {/* Modal */}
       {(showAddModal || showEditModal) && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[100] backdrop-blur-sm">
-          <div className="bg-white rounded-3xl p-8 max-w-md w-full relative">
+          <div className="bg-white rounded-3xl p-8 max-w-md w-full relative max-h-[90vh] overflow-y-auto">
             <button 
-              onClick={() => { setShowAddModal(false); setShowEditModal(false); setImage(null); }}
+              onClick={() => { 
+                setShowAddModal(false); 
+                setShowEditModal(false); 
+                setImage(null);
+                setFormData({ name: '', quantity: '', price: '', unit: 'pieces', lat: '', lng: '', address: '' });
+              }}
               className="absolute top-5 right-5 text-gray-400 hover:text-gray-600"
             >
               <X size={24} />
@@ -834,22 +873,120 @@ export default function SupplierDashboard() {
                 className="w-full p-4 border rounded-2xl outline-none focus:ring-2 focus:ring-blue-500"
               />
               <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-semibold text-gray-600 mb-1 block">Quantity</label>
+                  <input
+                    type="number" name="quantity" value={formData.quantity} onChange={handleInputChange}
+                    placeholder="Enter quantity" required min="0" step="any"
+                    className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-gray-600 mb-1 block">Unit</label>
+                  <select
+                    name="unit" value={formData.unit} onChange={handleInputChange}
+                    required
+                    className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                  >
+                    <option value="pieces">Pieces</option>
+                    <option value="kg">Kilograms (kg)</option>
+                    <option value="tons">Tons</option>
+                    <option value="liters">Liters</option>
+                    <option value="boxes">Boxes</option>
+                    <option value="units">Units</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-gray-600 mb-1 block">Price per Unit (₹ INR)</label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 font-bold">₹</span>
+                  <input
+                    type="number" name="price" value={formData.price} onChange={handleInputChange}
+                    placeholder="0.00" required min="0" step="0.01"
+                    className="w-full p-3 pl-8 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+              
+              {/* Location Fields */}
+              <div className="space-y-3 bg-gray-50 p-4 rounded-xl">
+                <div className="flex items-center justify-between">
+                  <label className="text-sm font-semibold text-gray-700">Location Information</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (navigator.geolocation) {
+                        setLoading(true);
+                        navigator.geolocation.getCurrentPosition(
+                          async (position) => {
+                            const { latitude, longitude } = position.coords;
+                            
+                            // Use reverse geocoding to get address
+                            try {
+                              const response = await fetch(
+                                `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`
+                              );
+                              const data = await response.json();
+                              
+                              setFormData(prev => ({
+                                ...prev,
+                                lat: latitude.toString(),
+                                lng: longitude.toString(),
+                                address: data.display_name || `${latitude}, ${longitude}`
+                              }));
+                            } catch (error) {
+                              console.error('Error getting address:', error);
+                              setFormData(prev => ({
+                                ...prev,
+                                lat: latitude.toString(),
+                                lng: longitude.toString(),
+                                address: `${latitude}, ${longitude}`
+                              }));
+                            } finally {
+                              setLoading(false);
+                            }
+                          },
+                          (error) => {
+                            console.error('Geolocation error:', error);
+                            alert('Unable to get location. Please enter manually.');
+                            setLoading(false);
+                          }
+                        );
+                      } else {
+                        alert('Geolocation is not supported by your browser');
+                      }
+                    }}
+                    disabled={loading}
+                    className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-lg font-semibold hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {loading ? 'Getting...' : '📍 Use My Location'}
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <input
+                    type="number" step="any" name="lat" value={formData.lat} onChange={handleInputChange}
+                    placeholder="Latitude" required
+                    className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                  />
+                  <input
+                    type="number" step="any" name="lng" value={formData.lng} onChange={handleInputChange}
+                    placeholder="Longitude" required
+                    className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                  />
+                </div>
                 <input
-                  type="number" name="quantity" value={formData.quantity} onChange={handleInputChange}
-                  placeholder="Stock" required
-                  className="w-full p-4 border rounded-2xl outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <input
-                  type="number" name="price" value={formData.price} onChange={handleInputChange}
-                  placeholder="Price ($)" required
-                  className="w-full p-4 border rounded-2xl outline-none focus:ring-2 focus:ring-blue-500"
+                  type="text" name="address" value={formData.address} onChange={handleInputChange}
+                  placeholder="Full Address" required
+                  className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-sm"
                 />
               </div>
+              
               <div className="border-2 border-dashed p-6 rounded-2xl text-center cursor-pointer hover:bg-gray-50">
                 <input
                   type="file" onChange={e => setImage(e.target.files[0])}
+                  accept="image/*"
                   className="hidden" id="file-upload"
-                  required={showAddModal}
                 />
                 <label htmlFor="file-upload" className="cursor-pointer">
                   <ImageIcon className="mx-auto text-blue-600 mb-2" size={32} />
