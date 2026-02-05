@@ -574,6 +574,11 @@ export default function ManufacturerDashboard() {
       return;
     }
     
+    console.log('🔍 Debug - Starting manufacture product:');
+    console.log('Selected material:', selectedMaterial);
+    console.log('Form data:', manufactureFormData);
+    console.log('Image file:', manufactureImage);
+    
     setLoading(true);
     
     try {
@@ -585,6 +590,12 @@ export default function ManufacturerDashboard() {
       formData.append('materialId', selectedMaterial._id);
       formData.append('image', manufactureImage);
       
+      console.log('📤 Sending request to:', `${API_URL}/manufacturer/create-product`);
+      console.log('FormData entries:');
+      for (let pair of formData.entries()) {
+        console.log(pair[0] + ': ', pair[1]);
+      }
+      
       const response = await fetch(`${API_URL}/manufacturer/create-product`, {
         method: 'POST',
         headers: {
@@ -595,6 +606,7 @@ export default function ManufacturerDashboard() {
       
       if (!response.ok) {
         const error = await response.json();
+        console.error('❌ Backend error response:', error);
         throw new Error(error.message || 'Failed to create product');
       }
       
@@ -614,21 +626,42 @@ export default function ManufacturerDashboard() {
       await fetchManufacturedProducts();
       
     } catch (err) {
-      console.error('Error manufacturing product:', err);
+      console.error('❌ Error manufacturing product:', err);
+      console.error('❌ Full error object:', err);
+      console.error('❌ Error message:', err.message);
       alert(`❌ ${err.message || 'Failed to create product'}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // NEW: Handle combining materials to create product
+  // UPDATED: Handle combining materials to create product
   const handleCombineMaterials = async (e) => {
     e.preventDefault();
+    
+    console.log('🔍 Debug - Starting combine materials process');
     
     if (selectedMaterialsForCombine.length < 2 || selectedMaterialsForCombine.length > 3) {
       alert('Please select 2-3 materials to combine');
       return;
     }
+    
+    if (!combineImage) {
+      alert('Please upload a product image');
+      return;
+    }
+    
+    // Validate form data
+    if (!combineFormData.name || !combineFormData.description || 
+        !combineFormData.quantity || !combineFormData.price) {
+      alert('Please fill in all product details');
+      return;
+    }
+
+    console.log('🔍 Combine materials details:');
+    console.log('Selected materials:', selectedMaterialsForCombine);
+    console.log('Form data:', combineFormData);
+    console.log('Image file:', combineImage);
 
     setLoading(true);
 
@@ -639,8 +672,12 @@ export default function ManufacturerDashboard() {
       formData.append('quantity', combineFormData.quantity);
       formData.append('price', combineFormData.price);
       formData.append('materialIds', JSON.stringify(selectedMaterialsForCombine.map(m => m._id)));
-      if (combineImage) {
-        formData.append('image', combineImage);
+      formData.append('image', combineImage);
+
+      console.log('📤 Sending request to:', `${API_URL}/manufacturer/manufacture-combined`);
+      console.log('FormData entries:');
+      for (let pair of formData.entries()) {
+        console.log(pair[0] + ': ', pair[1]);
       }
 
       const response = await fetch(`${API_URL}/manufacturer/manufacture-combined`, {
@@ -651,15 +688,19 @@ export default function ManufacturerDashboard() {
         body: formData
       });
 
+      const responseData = await response.json();
+      
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Failed to create combined product');
+        console.error('❌ Backend error response:', responseData);
+        console.error('❌ Status:', response.status);
+        console.error('❌ Status text:', response.statusText);
+        
+        throw new Error(responseData.message || `Server error: ${response.status} ${response.statusText}`);
       }
 
-      const result = await response.json();
-      console.log('✅ Combined product created:', result);
+      console.log('✅ Combined product created:', responseData);
 
-      alert(`✅ Successfully created "${combineFormData.name}" from combined materials!`);
+      alert(`✅ Successfully created "${combineFormData.name}" from ${selectedMaterialsForCombine.length} materials!`);
       
       // Reset and close modal
       setShowCombineModal(false);
@@ -670,15 +711,20 @@ export default function ManufacturerDashboard() {
       // Refresh data
       await fetchBoughtMaterials();
       await fetchManufacturedProducts();
+      
     } catch (err) {
-      console.error('Error creating combined product:', err);
+      console.error('❌ Error creating combined product:', err);
+      console.error('❌ Error name:', err.name);
+      console.error('❌ Error message:', err.message);
+      console.error('❌ Error stack:', err.stack);
+      
       alert(`❌ ${err.message || 'Failed to create combined product'}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // NEW: Toggle material selection for combining
+  // Toggle material selection for combining
   const toggleMaterialSelection = (material) => {
     setSelectedMaterialsForCombine(prev => {
       const exists = prev.find(m => m._id === material._id);
@@ -860,7 +906,7 @@ export default function ManufacturerDashboard() {
               </p>
             </div>
             
-            {/* NEW: Combine Materials Button */}
+            {/* Combine Materials Button */}
             {activeTab === 'bought' && availableMaterialsForCombine.length >= 2 && (
               <button
                 onClick={() => setShowCombineModal(true)}
@@ -904,7 +950,7 @@ export default function ManufacturerDashboard() {
         ) : (
           <>
             {activeTab === 'marketplace' ? (
-              /* Marketplace View - Keep existing structure */
+              /* Marketplace View */
               !selectedSupplierId ? (
                 <div className="animate-in fade-in duration-500">
                   {Object.values(groupedMaterials).length === 0 ? (
@@ -948,7 +994,7 @@ export default function ManufacturerDashboard() {
                   )}
                 </div>
               ) : (
-                /* Supplier Detail View - Show materials from selected supplier */
+                /* Supplier Detail View */
                 <div className="animate-in slide-in-from-bottom-4 duration-500">
                   {selectedSupplier && selectedSupplier.items && selectedSupplier.items.length > 0 ? (
                     <>
@@ -1054,7 +1100,7 @@ export default function ManufacturerDashboard() {
                 </div>
               )
             ) : activeTab === 'bought' ? (
-              /* Purchased Materials View - Keep existing structure */
+              /* Purchased Materials View */
               <div className="animate-in fade-in duration-500">
                 {boughtMaterials.length === 0 ? (
                   <div className="text-center py-16">
@@ -1174,7 +1220,7 @@ export default function ManufacturerDashboard() {
                 )}
               </div>
             ) : activeTab === 'products' ? (
-              /* My Products - Keep existing but show usedMaterials */
+              /* My Products */
               <div className="animate-in fade-in duration-500">
                 {manufacturedProducts.length === 0 ? (
                   <div className="text-center py-16">
@@ -1223,7 +1269,7 @@ export default function ManufacturerDashboard() {
                                 </span>
                               </div>
                               
-                              {/* NEW: Display materials used in combination */}
+                              {/* Display materials used in combination */}
                               {product.usedMaterials && product.usedMaterials.length > 0 && (
                                 <div className="mt-3 pt-3 border-t border-gray-100">
                                   <p className="text-xs font-bold text-gray-500 mb-2">Materials Used:</p>
@@ -1258,9 +1304,72 @@ export default function ManufacturerDashboard() {
                 )}
               </div>
             ) : (
-              /* Ledger View - Keep existing */
+              /* Ledger View */
               <div className="bg-white rounded-[32px] shadow-sm border border-gray-200 overflow-hidden animate-in fade-in duration-500">
-                {/* ... existing ledger table ... */}
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="bg-gray-50">
+                        <th className="p-4 text-left text-sm font-semibold text-gray-600">Product</th>
+                        <th className="p-4 text-left text-sm font-semibold text-gray-600">Quantity</th>
+                        <th className="p-4 text-left text-sm font-semibold text-gray-600">Amount</th>
+                        <th className="p-4 text-left text-sm font-semibold text-gray-600">Supplier</th>
+                        <th className="p-4 text-left text-sm font-semibold text-gray-600">Date</th>
+                        <th className="p-4 text-left text-sm font-semibold text-gray-600">Tx Hash</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {purchases.length === 0 ? (
+                        <tr>
+                          <td colSpan="6" className="p-8 text-center text-gray-500">
+                            <div className="flex flex-col items-center">
+                              <History className="text-gray-300 mb-2" size={32} />
+                              <p>No transactions yet</p>
+                            </div>
+                          </td>
+                        </tr>
+                      ) : (
+                        purchases.map(purchase => (
+                          <tr key={purchase._id} className="hover:bg-gray-50 transition">
+                            <td className="p-4">
+                              <div className="flex items-center space-x-3">
+                                {purchase.productId?.image && (
+                                  <img 
+                                    src={purchase.productId.image} 
+                                    className="w-10 h-10 rounded-lg object-cover" 
+                                    alt="" 
+                                  />
+                                )}
+                                <div>
+                                  <p className="font-medium text-gray-900">{purchase.productName}</p>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="p-4 text-sm text-gray-700">{purchase.quantity}</td>
+                            <td className="p-4">
+                              <p className="font-bold text-green-600">₹{purchase.amount.toFixed(2)}</p>
+                            </td>
+                            <td className="p-4 text-sm text-gray-700">{purchase.sellerName}</td>
+                            <td className="p-4 text-sm text-gray-500">
+                              {new Date(purchase.timestamp).toLocaleDateString()}
+                            </td>
+                            <td className="p-4">
+                              <a
+                                href={`https://etherscan.io/tx/${purchase.txHash}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center space-x-1 text-indigo-600 hover:text-indigo-800 text-sm"
+                              >
+                                <ExternalLink size={12} />
+                                <span>View</span>
+                              </a>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
           </>
@@ -1606,7 +1715,7 @@ export default function ManufacturerDashboard() {
         </div>
       )}
 
-      {/* NEW: Combine Materials Modal */}
+      {/* Combine Materials Modal */}
       {showCombineModal && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[100] backdrop-blur-sm">
           <div className="bg-white rounded-3xl p-8 max-w-4xl w-full relative max-h-[90vh] overflow-y-auto">
@@ -1739,6 +1848,7 @@ export default function ManufacturerDashboard() {
                     className="hidden"
                     id="combine-image-upload"
                     accept="image/*"
+                    required
                   />
                   <label htmlFor="combine-image-upload" className="cursor-pointer">
                     <Package className="mx-auto text-green-600 mb-2" size={32} />
@@ -1766,8 +1876,6 @@ export default function ManufacturerDashboard() {
           </div>
         </div>
       )}
-
-      {/* Keep all other existing modals below... */}
     </div>
   );
 }

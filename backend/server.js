@@ -198,8 +198,8 @@ const manufacturedProductSchema = new mongoose.Schema({
   
   materialId: { 
     type: mongoose.Schema.Types.ObjectId, 
-    ref: 'Transaction',
-    required: true 
+    ref: 'PurchasedMaterial',
+    required: false // Made optional for combined products
   },
   manufacturerId: { 
     type: mongoose.Schema.Types.ObjectId, 
@@ -213,6 +213,12 @@ const manufacturedProductSchema = new mongoose.Schema({
   usedMaterials: { 
     type: [String], 
     default: [] 
+  },
+  // Array to store IDs of materials used in combination
+  usedMaterialIds: {
+    type: [mongoose.Schema.Types.ObjectId],
+    ref: 'PurchasedMaterial',
+    default: []
   },
   status: { 
     type: String, 
@@ -497,7 +503,6 @@ apiRouter.get(
         }).sort({ createdAt: -1 });
         
         console.log(`✅ Found ${allProducts.length} total products with stock > 0`);
-        
         
         return res.json(allProducts);
       }
@@ -834,7 +839,7 @@ apiRouter.get(
   }
 );
 
-// MANUFACTURER: Create a new product from purchased material (with image upload)
+// MANUFACTURER: Create a new product from purchased material (with image upload) - UPDATED
 apiRouter.post(
   '/manufacturer/create-product',
   authenticateToken,
@@ -844,6 +849,15 @@ apiRouter.post(
     try {
       const { materialId, name, description, price, quantity } = req.body;
       
+      console.log('🏭 Create product request:', {
+        materialId,
+        name,
+        quantity,
+        price,
+        manufacturer: req.user.email,
+        hasImage: !!req.file
+      });
+
       if (!materialId || !name || !description || !price || !quantity) {
         return res.status(400).json({ 
           message: 'All fields are required' 
@@ -867,24 +881,45 @@ apiRouter.post(
         });
       }
 
+      // Get manufacturer details
+      const manufacturer = await User.findById(req.user.id);
+      if (!manufacturer) {
+        return res.status(404).json({ message: 'Manufacturer not found' });
+      }
+
+      // Handle location with better validation
+      let location = material.location;
+      
+      if (!location || 
+          location.lat === undefined || 
+          location.lng === undefined || 
+          !location.address) {
+        console.warn('⚠️ Material has incomplete location, using defaults:', location);
+        location = {
+          lat: 0,
+          lng: 0,
+          address: 'Location not specified'
+        };
+      }
+
       // Update purchased material status to used
       material.status = 'used';
       await material.save();
 
-      const manufacturer = await User.findById(req.user.id);
-
-      // Generate a simple tx hash for demonstration
-      const txHash = '0x' + Array.from({length: 64}, () => 
-        Math.floor(Math.random() * 16).toString(16)
-      ).join('');
+      // Generate tx hash
+      const txHash = `0x${Date.now().toString(16)}${Math.random().toString(16).substr(2, 8)}`;
 
       const product = new ManufacturedProduct({
         name,
         description,
         price: parseFloat(price),
         quantity: parseInt(quantity),
-        image: req.file.path, // Use uploaded image
-        location: material.location, // Copy location from purchased material
+        image: req.file.path,
+        location: {
+          lat: parseFloat(location.lat),
+          lng: parseFloat(location.lng),
+          address: location.address.toString()
+        },
         materialId: material._id,
         manufacturerId: manufacturer._id,
         manufacturerName: manufacturer.name,
@@ -896,7 +931,8 @@ apiRouter.post(
       await product.save();
 
       console.log('✅ Product created:', {
-        name,
+        productId: product._id,
+        name: product.name,
         manufacturer: manufacturer.email,
         fromMaterial: material.productName
       });
@@ -904,7 +940,12 @@ apiRouter.post(
       res.status(201).json(product);
     } catch (err) {
       console.error('❌ Error creating product:', err);
-      res.status(500).json({ message: 'Error creating product', error: err.message });
+      console.error('❌ Error stack:', err.stack);
+      res.status(500).json({ 
+        message: 'Error creating product', 
+        error: err.message,
+        details: process.env.NODE_ENV === 'development' ? err.stack : undefined
+      });
     }
   }
 );
@@ -1242,8 +1283,7 @@ apiRouter.delete(
   }
 );
 
-
-// MANUFACTURER: Manufacture product from combined materials (2-3 materials)
+// MANUFACTURER: Manufacture product from combined materials (2-3 materials) - COMPLETELY UPDATED
 apiRouter.post(
   '/manufacturer/manufacture-combined',
   authenticateToken,
@@ -1251,97 +1291,231 @@ apiRouter.post(
   upload.single('image'),
   async (req, res) => {
     try {
+      console.log('🔍 STARTING COMBINED MANUFACTURING PROCESS');
+      console.log('📦 Request body:', req.body);
+      console.log('🖼️ File uploaded:', req.file ? `Yes - ${req.file.originalname}` : 'No');
+      console.log('👤 User:', req.user.email, 'ID:', req.user.id);
+      
       const { name, description, quantity, price, materialIds } = req.body;
       
-      console.log('🏭 Combined manufacturing request:', {
-        name,
-        quantity,
-        price,
-        materialIds,
-        manufacturer: req.user.email
-      });
-
+      // Validate required fields
       if (!name || !description || !quantity || !price || !materialIds) {
+        console.log('❌ Missing required fields:', { 
+          name: !!name, 
+          description: !!description, 
+          quantity: !!quantity, 
+          price: !!price, 
+          materialIds: !!materialIds 
+        });
         return res.status(400).json({ 
-          message: 'All fields are required including material IDs' 
+          message: 'All fields are required including material IDs',
+          required: ['name', 'description', 'quantity', 'price', 'materialIds']
+        });
+      }
+
+      // Validate image
+      if (!req.file) {
+        console.log('❌ No image file provided');
+        return res.status(400).json({ 
+          message: 'Product image is required' 
+        });
+      }
+
+      // Validate file type
+      const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+      if (!allowedTypes.includes(req.file.mimetype)) {
+        console.log('❌ Invalid file type:', req.file.mimetype);
+        return res.status(400).json({ 
+          message: 'Only JPEG, PNG and WebP images are allowed' 
         });
       }
 
       // Parse material IDs
-      const parsedMaterialIds = JSON.parse(materialIds);
+      let parsedMaterialIds;
+      try {
+        parsedMaterialIds = JSON.parse(materialIds);
+        console.log('✅ Parsed material IDs:', parsedMaterialIds);
+      } catch (parseError) {
+        console.log('❌ Error parsing materialIds:', parseError);
+        return res.status(400).json({ 
+          message: 'Invalid material IDs format. Should be a JSON array.' 
+        });
+      }
       
-      if (!Array.isArray(parsedMaterialIds) || parsedMaterialIds.length < 2 || parsedMaterialIds.length > 3) {
+      // Validate number of materials
+      if (!Array.isArray(parsedMaterialIds)) {
+        console.log('❌ materialIds is not an array:', typeof parsedMaterialIds);
+        return res.status(400).json({ 
+          message: 'Material IDs must be an array' 
+        });
+      }
+      
+      if (parsedMaterialIds.length < 2 || parsedMaterialIds.length > 3) {
+        console.log('❌ Invalid number of materials:', parsedMaterialIds.length);
         return res.status(400).json({ 
           message: 'You must select 2-3 materials to combine' 
         });
       }
 
       // Find all selected materials
+      console.log('🔍 Looking for materials with IDs:', parsedMaterialIds);
       const materials = await PurchasedMaterial.find({
         _id: { $in: parsedMaterialIds },
         manufacturerId: req.user.id,
         status: 'available'
       });
 
+      console.log(`✅ Found ${materials.length} materials out of ${parsedMaterialIds.length} requested`);
+
+      // Check if all materials were found
       if (materials.length !== parsedMaterialIds.length) {
+        const foundIds = materials.map(m => m._id.toString());
+        const missingIds = parsedMaterialIds.filter(id => !foundIds.includes(id));
+        console.log('❌ Missing materials IDs:', missingIds);
+        
         return res.status(404).json({ 
-          message: 'Some materials not found or already used' 
+          message: 'Some materials not found or already used',
+          missingIds: missingIds
         });
       }
+
+      // Log found materials
+      materials.forEach((material, index) => {
+        console.log(`📦 Material ${index + 1}:`, {
+          id: material._id,
+          name: material.productName,
+          status: material.status,
+          hasLocation: !!material.location,
+          location: material.location
+        });
+      });
 
       // Get manufacturer details
       const manufacturer = await User.findById(req.user.id);
       if (!manufacturer) {
+        console.log('❌ Manufacturer not found:', req.user.id);
         return res.status(404).json({ message: 'Manufacturer not found' });
       }
+      console.log('✅ Manufacturer found:', manufacturer.email);
 
-      // Use location from first material
-      const location = materials[0].location;
+      // Find location from materials
+      let location = {
+        lat: 28.6139,  // Default to Delhi coordinates
+        lng: 77.2090,
+        address: 'Default location'
+      };
 
-      // Generate a unique transaction hash for the manufactured product
-      const txHash = `mfg-combined-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      // Try to get location from first material with valid location
+      for (const material of materials) {
+        if (material.location && 
+            material.location.lat !== undefined && 
+            material.location.lng !== undefined && 
+            material.location.address) {
+          
+          console.log('📍 Found valid location in material:', material.productName);
+          location = {
+            lat: Number(material.location.lat) || 28.6139,
+            lng: Number(material.location.lng) || 77.2090,
+            address: String(material.location.address) || 'Default location'
+          };
+          break;
+        }
+      }
+      
+      console.log('✅ Using location:', location);
+
+      // Validate numeric inputs
+      const parsedQuantity = parseInt(quantity);
+      const parsedPrice = parseFloat(price);
+      
+      if (isNaN(parsedQuantity) || parsedQuantity <= 0) {
+        return res.status(400).json({ 
+          message: 'Quantity must be a positive number' 
+        });
+      }
+      
+      if (isNaN(parsedPrice) || parsedPrice <= 0) {
+        return res.status(400).json({ 
+          message: 'Price must be a positive number' 
+        });
+      }
+
+      // Generate a unique transaction hash
+      const txHash = `0x${Date.now().toString(16)}${Math.random().toString(16).substr(2, 8)}`;
+      console.log('🔗 Generated transaction hash:', txHash);
 
       // Create manufactured product
       const manufacturedProduct = new ManufacturedProduct({
-        name,
-        description,
-        price: parseFloat(price),
-        quantity: parseInt(quantity),
-        image: req.file ? req.file.path : materials[0].image,
-        location,
-        materialId: materials[0]._id,
+        name: String(name),
+        description: String(description),
+        price: parsedPrice,
+        quantity: parsedQuantity,
+        image: req.file.path, // Cloudinary URL
+        location: {
+          lat: location.lat,
+          lng: location.lng,
+          address: location.address
+        },
+        materialId: materials[0]._id, // Reference to first material (for compatibility)
         manufacturerId: manufacturer._id,
         manufacturerName: manufacturer.name,
         company: manufacturer.company,
-        txHash,
         status: 'active',
-        usedMaterials: materials.map(m => m.productName)
+        usedMaterials: materials.map(m => m.productName),
+        usedMaterialIds: materials.map(m => m._id) // Store all material IDs
+
       });
 
+      console.log('💾 Saving manufactured product to database...');
       await manufacturedProduct.save();
+      console.log('✅ Manufactured product saved:', manufacturedProduct._id);
 
       // Mark all used materials as 'used'
+      console.log('🔄 Updating material status to "used"...');
       await PurchasedMaterial.updateMany(
         { _id: { $in: parsedMaterialIds } },
         { $set: { status: 'used' } }
       );
+      console.log('✅ Materials marked as used');
 
-      console.log('✅ Combined product manufactured:', {
-        product: manufacturedProduct.name,
-        materials: materials.map(m => m.productName),
-        manufacturer: manufacturer.email
+      console.log('🎉 COMBINED MANUFACTURING COMPLETE!');
+      console.log('📊 Summary:', {
+        productId: manufacturedProduct._id,
+        productName: manufacturedProduct.name,
+        materialsUsed: materials.map(m => m.productName),
+        manufacturer: manufacturer.email,
+        quantity: manufacturedProduct.quantity,
+        price: manufacturedProduct.price,
+        location: manufacturedProduct.location
       });
 
       res.status(201).json({
         message: 'Product manufactured successfully from combined materials',
-        product: manufacturedProduct
+        product: manufacturedProduct,
+        materialsUsed: materials.map(m => ({
+          id: m._id,
+          name: m.productName
+        }))
       });
 
     } catch (err) {
-      console.error('❌ Combined manufacturing error:', err);
+      console.error('❌ COMBINED MANUFACTURING ERROR:', err);
+      console.error('❌ Error name:', err.name);
+      console.error('❌ Error message:', err.message);
+      console.error('❌ Error stack:', err.stack);
+      console.error('❌ Request details:', {
+        body: req.body,
+        file: req.file,
+        user: req.user,
+        timestamp: new Date().toISOString()
+      });
+      
       res.status(500).json({ 
-        message: 'Error manufacturing combined product', 
-        error: err.message 
+        message: 'Error manufacturing combined product',
+        error: err.message,
+        errorType: err.name,
+        details: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+        timestamp: new Date().toISOString()
       });
     }
   }
