@@ -235,6 +235,27 @@ export default function ManufacturerDashboard() {
         const connectedAccount = accounts[0];
         setAccount(connectedAccount);
         localStorage.setItem(`wallet_${user._id}`, connectedAccount);
+        
+        // ✅ SAVE WALLET TO BACKEND
+        try {
+          const response = await fetch(`${API_URL}/users/wallet`, {
+            method: 'PUT',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ walletAddress: connectedAccount })
+          });
+          
+          if (response.ok) {
+            console.log('✅ Wallet saved to backend:', connectedAccount);
+          } else {
+            const error = await response.json();
+            console.error('Failed to save wallet:', error);
+          }
+        } catch (saveErr) {
+          console.error('Error saving wallet to backend:', saveErr);
+        }
       }
     } catch (err) {
       console.error("Wallet connection failed:", err);

@@ -189,6 +189,44 @@ const manufacturedProductSchema = new mongoose.Schema({
   quantity: { type: Number, required: true },
   image: { type: String, required: true },
   
+  // Additional product images for gallery
+  galleryImages: {
+    type: [String],
+    default: []
+  },
+  
+  // Detailed product information
+  productDetails: {
+    brand: { type: String, default: '' },
+    type: { type: String, default: '' },
+    maxShelfLife: { type: String, default: '' },
+    isPerishable: { type: Boolean, default: false },
+    isOrganic: { type: Boolean, default: false },
+    usedFor: { type: String, default: '' },
+    packOf: { type: Number, default: 1 },
+    unit: { type: String, default: 'kg' }, // kg, pieces, liters, etc.
+    specifications: { type: String, default: '' },
+    manufacture: { type: String, default: '' }
+  },
+  
+  // Control visibility on customer page
+  isVisibleToCustomers: {
+    type: Boolean,
+    default: true
+  },
+  
+  // Discount information
+  discount: {
+    percentage: { type: Number, default: 0 },
+    originalPrice: { type: Number, default: 0 }
+  },
+  
+  // Product ratings
+  rating: {
+    average: { type: Number, default: 0 },
+    count: { type: Number, default: 0 }
+  },
+  
   // Location from original material
   location: {
     lat: { type: Number, required: true },
@@ -507,13 +545,16 @@ apiRouter.get(
         return res.json(allProducts);
       }
       
-      // If user is customer, return manufactured products
+      // If user is customer, return manufactured products (only visible ones)
       if (req.user.role === 'customers') {
         const products = await ManufacturedProduct.find({
           status: 'active',
-          quantity: { $gt: 0 }
-        }).sort({ createdAt: -1 });
-        console.log(`✅ Customer ${req.user.email}: ${products.length} available products`);
+          quantity: { $gt: 0 },
+          isVisibleToCustomers: true // Only show visible products
+        })
+        .populate('manufacturerId', 'name company walletAddress email')  // ✅ Include walletAddress
+        .sort({ createdAt: -1 });
+        console.log(`✅ Customer ${req.user.email}: ${products.length} available visible products`);
         
         return res.json(products);
       }
@@ -523,6 +564,34 @@ apiRouter.get(
     } catch (err) {
       console.error('❌ Error fetching products:', err);
       res.status(500).json({ message: 'Error fetching products', error: err.message });
+    }
+  }
+);
+
+// Get single product detail (for customers)
+apiRouter.get(
+  '/products/:id/detail',
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const product = await ManufacturedProduct.findById(req.params.id);
+      
+      if (!product) {
+        return res.status(404).json({ message: 'Product not found' });
+      }
+
+      // If customer, only allow visible products
+      if (req.user.role === 'customers' && !product.isVisibleToCustomers) {
+        return res.status(403).json({ message: 'Product not available' });
+      }
+
+      res.json(product);
+    } catch (err) {
+      console.error('❌ Error fetching product detail:', err);
+      res.status(500).json({ 
+        message: 'Error fetching product detail', 
+        error: err.message 
+      });
     }
   }
 );
@@ -1113,6 +1182,149 @@ apiRouter.delete(
   }
 );
 
+// Toggle product visibility for customers
+apiRouter.patch(
+  '/manufacturer/products/:id/toggle-visibility',
+  authenticateToken,
+  authorizeRole('manufacturers'),
+  async (req, res) => {
+    try {
+      const product = await ManufacturedProduct.findOne({
+        _id: req.params.id,
+        manufacturerId: req.user.id
+      });
+
+      if (!product) {
+        return res.status(404).json({ 
+          message: 'Product not found or unauthorized' 
+        });
+      }
+
+      product.isVisibleToCustomers = !product.isVisibleToCustomers;
+      await product.save();
+
+      res.json({ 
+        message: `Product ${product.isVisibleToCustomers ? 'shown' : 'hidden'} on customer page`,
+        product 
+      });
+    } catch (err) {
+      console.error('❌ Error toggling visibility:', err);
+      res.status(500).json({ 
+        message: 'Error toggling visibility', 
+        error: err.message 
+      });
+    }
+  }
+);
+
+// Update product details (including gallery, specifications, etc.)
+apiRouter.patch(
+  '/manufacturer/products/:id/details',
+  authenticateToken,
+  authorizeRole('manufacturers'),
+  upload.array('galleryImages', 5), // Allow up to 5 additional images
+  async (req, res) => {
+    try {
+      const product = await ManufacturedProduct.findOne({
+        _id: req.params.id,
+        manufacturerId: req.user.id
+      });
+
+      if (!product) {
+        return res.status(404).json({ 
+          message: 'Product not found or unauthorized' 
+        });
+      }
+
+      // Update basic fields if provided
+      if (req.body.name) product.name = req.body.name;
+      if (req.body.description) product.description = req.body.description;
+      if (req.body.price) product.price = parseFloat(req.body.price);
+      if (req.body.quantity) product.quantity = parseInt(req.body.quantity);
+
+      // Update product details
+      if (req.body.productDetails) {
+        const details = typeof req.body.productDetails === 'string' 
+          ? JSON.parse(req.body.productDetails) 
+          : req.body.productDetails;
+        
+        product.productDetails = {
+          ...product.productDetails,
+          ...details
+        };
+      }
+
+      // Update discount if provided
+      if (req.body.discount) {
+        const discount = typeof req.body.discount === 'string' 
+          ? JSON.parse(req.body.discount) 
+          : req.body.discount;
+        
+        product.discount = discount;
+      }
+
+      // Add gallery images if uploaded
+      if (req.files && req.files.length > 0) {
+        const newImages = req.files.map(file => file.path);
+        product.galleryImages = [...product.galleryImages, ...newImages];
+      }
+
+      await product.save();
+
+      res.json({ 
+        message: 'Product details updated successfully',
+        product 
+      });
+    } catch (err) {
+      console.error('❌ Error updating product details:', err);
+      res.status(500).json({ 
+        message: 'Error updating product details', 
+        error: err.message 
+      });
+    }
+  }
+);
+
+// Remove gallery image
+apiRouter.delete(
+  '/manufacturer/products/:id/gallery/:imageIndex',
+  authenticateToken,
+  authorizeRole('manufacturers'),
+  async (req, res) => {
+    try {
+      const product = await ManufacturedProduct.findOne({
+        _id: req.params.id,
+        manufacturerId: req.user.id
+      });
+
+      if (!product) {
+        return res.status(404).json({ 
+          message: 'Product not found or unauthorized' 
+        });
+      }
+
+      const imageIndex = parseInt(req.params.imageIndex);
+      if (imageIndex < 0 || imageIndex >= product.galleryImages.length) {
+        return res.status(400).json({ message: 'Invalid image index' });
+      }
+
+      product.galleryImages.splice(imageIndex, 1);
+      await product.save();
+
+      res.json({ 
+        message: 'Gallery image removed successfully',
+        product 
+      });
+    } catch (err) {
+      console.error('❌ Error removing gallery image:', err);
+      res.status(500).json({ 
+        message: 'Error removing gallery image', 
+        error: err.message 
+      });
+    }
+  }
+);
+
 // CUSTOMER: Purchase manufactured product
 apiRouter.post(
   '/products/buy-final',
@@ -1559,6 +1771,96 @@ apiRouter.get(
     }
   }
 );
+
+/* ===================== WALLET ROUTES ===================== */
+
+// GET user's wallet address
+apiRouter.get('/users/:userId/wallet', authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    console.log(`🔍 Fetching wallet for user: ${userId}`);
+    
+    const user = await User.findById(userId).select('walletAddress name role company');
+    
+    if (!user) {
+      console.log(`❌ User not found: ${userId}`);
+      return res.status(404).json({ 
+        message: 'User not found',
+        walletAddress: null 
+      });
+    }
+    
+    console.log(`✅ User found: ${user.name}, wallet: ${user.walletAddress || 'not set'}`);
+    
+    res.json({ 
+      walletAddress: user.walletAddress || null,
+      name: user.name,
+      role: user.role,
+      company: user.company
+    });
+    
+  } catch (err) {
+    console.error('❌ Error fetching user wallet:', err);
+    res.status(500).json({ 
+      message: 'Server error',
+      error: err.message 
+    });
+  }
+});
+
+// UPDATE user's wallet address
+apiRouter.put('/users/wallet', authenticateToken, async (req, res) => {
+  try {
+    const { walletAddress } = req.body;
+    
+    console.log(`💳 Updating wallet for user: ${req.user.id}`);
+    console.log(`💳 New wallet address: ${walletAddress}`);
+    
+    // Validate
+    if (!walletAddress) {
+      return res.status(400).json({ message: 'Wallet address is required' });
+    }
+    
+    if (!/^0x[a-fA-F0-9]{40}$/.test(walletAddress)) {
+      return res.status(400).json({ message: 'Invalid Ethereum wallet address format' });
+    }
+    
+    if (walletAddress === '0x0000000000000000000000000000000000000000') {
+      return res.status(400).json({ message: 'Cannot use burn address as wallet' });
+    }
+    
+    // Update
+    const user = await User.findByIdAndUpdate(
+      req.user.id,
+      { walletAddress },
+      { new: true }
+    ).select('walletAddress name role company');
+    
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    console.log(`✅ Wallet updated for ${user.name}: ${walletAddress}`);
+    
+    res.json({ 
+      message: 'Wallet address saved successfully',
+      walletAddress: user.walletAddress,
+      user: {
+        name: user.name,
+        role: user.role,
+        company: user.company
+      }
+    });
+    
+  } catch (err) {
+    console.error('❌ Error updating wallet:', err);
+    res.status(500).json({ 
+      message: 'Server error',
+      error: err.message 
+    });
+  }
+});
 
 // Apply the router to the app
 app.use('/api', apiRouter);
