@@ -151,7 +151,7 @@ const purchasedMaterialSchema = new mongoose.Schema({
     address: { type: String, required: true }
   },
   
-  txHash: { type: String, required: true, unique: true },
+  txHash: { type: String, required: true },
   status: { 
     type: String, 
     enum: ['available', 'used', 'sold'], 
@@ -493,38 +493,8 @@ apiRouter.get(
         
         console.log(`✅ Found ${allProducts.length} total products with stock > 0`);
         
-        console.log(`📜 [STEP 2] Fetching transactions for manufacturer ID: ${req.user.id}`);
-        // Get all transactions for this manufacturer
-        const manufacturerTransactions = await Transaction.find({ 
-          buyerId: req.user.id,
-          status: 'completed'
-        });
         
-        console.log(`✅ Manufacturer has ${manufacturerTransactions.length} completed transactions`);
-        
-        // Create a Set of product IDs that the manufacturer has already purchased
-        const purchasedProductIds = new Set();
-        manufacturerTransactions.forEach(transaction => {
-          if (transaction.productId) {
-            const productIdStr = transaction.productId.toString();
-            purchasedProductIds.add(productIdStr);
-          }
-        });
-        
-        console.log(`🛒 Purchased product IDs (${purchasedProductIds.size}):`, Array.from(purchasedProductIds));
-        
-        console.log(`⚡ [STEP 3] Filtering products...`);
-        // Filter out products that the manufacturer has already purchased
-        const filteredProducts = allProducts.filter(product => {
-          const productIdStr = product._id.toString();
-          return !purchasedProductIds.has(productIdStr);
-        });
-        
-        console.log(`✅ FILTERING RESULTS:`);
-        console.log(`   Total products in system: ${allProducts.length}`);
-        console.log(`   Products available for purchase: ${filteredProducts.length}`);
-        
-        return res.json(filteredProducts);
+        return res.json(allProducts);
       }
       
       // If user is customer, return manufactured products
@@ -593,21 +563,6 @@ apiRouter.post(
         });
       }
 
-      // Check if manufacturer has already purchased this product
-      console.log(`🔍 Checking for existing purchase of product ${product._id} by manufacturer ${req.user.id}`);
-      const existingPurchase = await Transaction.findOne({
-        buyerId: req.user.id,
-        productId: product._id,
-        status: 'completed'
-      });
-      
-      if (existingPurchase) {
-        console.log(`❌ Manufacturer already purchased this product on ${existingPurchase.timestamp}`);
-        return res.status(400).json({ 
-          message: 'You have already purchased this material' 
-        });
-      }
-      console.log(`✅ No existing purchase found, proceeding...`);
 
       // Find buyer
       const buyer = await User.findById(req.user.id);
@@ -670,22 +625,6 @@ apiRouter.post(
       });
       console.log(`✅ PurchasedMaterial record created`);
 
-      // Auto-create manufactured product with the same image and location
-      const manufacturedProduct = await ManufacturedProduct.create({
-        name: product.name,
-        image: product.image,
-        description: product.description || `Manufactured from high-quality ${product.name}`,
-        price: product.price * 2, // Double the price for manufactured product
-        quantity: quantityToBuy,
-        location: product.location, // Copy location from original product
-        materialId: transaction._id,
-        manufacturerId: buyer._id,
-        manufacturerName: buyer.name,
-        company: buyer.company,
-        txHash: externalTxHash,
-        status: 'active'
-      });
-      console.log(`✅ ManufacturedProduct auto-created`);
 
       console.log('🎉 PURCHASE COMPLETE:', {
         product: product.name,
@@ -848,6 +787,27 @@ apiRouter.get(
   }
 );
 
+// MANUFACTURER: Get bought materials (same as purchased materials, different naming)
+apiRouter.get(
+  '/manufacturer/bought-materials',
+  authenticateToken,
+  authorizeRole('manufacturers'),
+  async (req, res) => {
+    try {
+      const boughtMaterials = await PurchasedMaterial.find({ 
+        manufacturerId: req.user.id
+      }).sort({ purchasedAt: -1 });
+      
+      console.log(`📦 Bought materials for ${req.user.email}: ${boughtMaterials.length} items`);
+      
+      res.json(boughtMaterials);
+    } catch (err) {
+      console.error('❌ Error fetching bought materials:', err);
+      res.status(500).json({ message: 'Error fetching bought materials', error: err.message });
+    }
+  }
+);
+
 // MANUFACTURER: Get purchase history (raw materials bought)
 apiRouter.get(
   '/manufacturer/purchases',
@@ -865,6 +825,81 @@ apiRouter.get(
     } catch (err) {
       console.error('❌ Error fetching purchases:', err);
       res.status(500).json({ message: 'Error fetching purchase history', error: err.message });
+    }
+  }
+);
+
+// MANUFACTURER: Create a new product from purchased material (with image upload)
+apiRouter.post(
+  '/manufacturer/create-product',
+  authenticateToken,
+  authorizeRole('manufacturers'),
+  upload.single('image'),
+  async (req, res) => {
+    try {
+      const { materialId, name, description, price, quantity } = req.body;
+      
+      if (!materialId || !name || !description || !price || !quantity) {
+        return res.status(400).json({ 
+          message: 'All fields are required' 
+        });
+      }
+
+      if (!req.file) {
+        return res.status(400).json({ message: 'Product image is required' });
+      }
+
+      // Verify the material belongs to this manufacturer
+      const material = await PurchasedMaterial.findOne({
+        _id: materialId,
+        manufacturerId: req.user.id,
+        status: 'available'
+      });
+
+      if (!material) {
+        return res.status(404).json({ 
+          message: 'Material not found, unauthorized, or already used' 
+        });
+      }
+
+      // Update purchased material status to used
+      material.status = 'used';
+      await material.save();
+
+      const manufacturer = await User.findById(req.user.id);
+
+      // Generate a simple tx hash for demonstration
+      const txHash = '0x' + Array.from({length: 64}, () => 
+        Math.floor(Math.random() * 16).toString(16)
+      ).join('');
+
+      const product = new ManufacturedProduct({
+        name,
+        description,
+        price: parseFloat(price),
+        quantity: parseInt(quantity),
+        image: req.file.path, // Use uploaded image
+        location: material.location, // Copy location from purchased material
+        materialId: material._id,
+        manufacturerId: manufacturer._id,
+        manufacturerName: manufacturer.name,
+        company: manufacturer.company,
+        txHash: txHash,
+        status: 'active'
+      });
+
+      await product.save();
+
+      console.log('✅ Product created:', {
+        name,
+        manufacturer: manufacturer.email,
+        fromMaterial: material.productName
+      });
+
+      res.status(201).json(product);
+    } catch (err) {
+      console.error('❌ Error creating product:', err);
+      res.status(500).json({ message: 'Error creating product', error: err.message });
     }
   }
 );

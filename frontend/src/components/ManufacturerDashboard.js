@@ -33,7 +33,8 @@ function LoaderCircle({ size = 24, className = "" }) {
 export default function ManufacturerDashboard() {
   const [materials, setMaterials] = useState([]);
   const [purchases, setPurchases] = useState([]);
-  const [purchasedMaterials, setPurchasedMaterials] = useState([]);
+  const [boughtMaterials, setBoughtMaterials] = useState([]); // New: Materials bought from suppliers
+  const [manufacturedProducts, setManufacturedProducts] = useState([]); // New: Products created from materials
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('marketplace');
   const [selectedSupplierId, setSelectedSupplierId] = useState(null);
@@ -42,6 +43,17 @@ export default function ManufacturerDashboard() {
   const [showPurchaseModal, setShowPurchaseModal] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [purchaseQuantity, setPurchaseQuantity] = useState(1);
+  
+  // New: Manufacture product modal state
+  const [showManufactureModal, setShowManufactureModal] = useState(false);
+  const [selectedMaterial, setSelectedMaterial] = useState(null);
+  const [manufactureFormData, setManufactureFormData] = useState({
+    name: '',
+    description: '',
+    quantity: '',
+    price: ''
+  });
+  const [manufactureImage, setManufactureImage] = useState(null);
   
   // Wallet State
   const [account, setAccount] = useState(null);
@@ -331,27 +343,41 @@ export default function ManufacturerDashboard() {
     }
   }, [token]);
 
-  const fetchPurchasedMaterials = useCallback(async () => {
+  const fetchBoughtMaterials = useCallback(async () => {
     try {
-      const response = await fetch(`${API_URL}/manufacturer/purchased-materials`, {
+      const response = await fetch(`${API_URL}/manufacturer/bought-materials`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const data = await response.json();
-      setPurchasedMaterials(Array.isArray(data) ? data : []);
+      setBoughtMaterials(Array.isArray(data) ? data : []);
     } catch (err) {
-      console.error('Error loading purchased materials:', err);
+      console.error('Error loading bought materials:', err);
+    }
+  }, [token]);
+
+  const fetchManufacturedProducts = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_URL}/manufacturer/products`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await response.json();
+      setManufacturedProducts(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Error loading manufactured products:', err);
     }
   }, [token]);
 
   useEffect(() => {
     if (activeTab === 'marketplace') {
       fetchMaterials();
-    } else if (activeTab === 'purchased') {
-      fetchPurchasedMaterials();
+    } else if (activeTab === 'bought') {
+      fetchBoughtMaterials();
+    } else if (activeTab === 'products') {
+      fetchManufacturedProducts();
     } else {
       fetchPurchases();
     }
-  }, [activeTab, fetchMaterials, fetchPurchases, fetchPurchasedMaterials]);
+  }, [activeTab, fetchMaterials, fetchPurchases, fetchBoughtMaterials, fetchManufacturedProducts]);
 
   // Function to get Google Maps URL
   const getGoogleMapsUrl = (lat, lng, address) => {
@@ -512,7 +538,7 @@ export default function ManufacturerDashboard() {
       console.log('🔄 Refreshing data after purchase...');
       await fetchMaterials();
       await fetchPurchases();
-      await fetchPurchasedMaterials();
+      await fetchBoughtMaterials(); // Changed from fetchPurchasedMaterials
       
       // Show success message
       setTimeout(() => {
@@ -536,6 +562,66 @@ export default function ManufacturerDashboard() {
       setPurchaseError(errorMessage);
       setTxStatus(null);
       alert(`❌ ${errorMessage}`);
+    }
+  };
+
+  const handleManufactureProduct = async (e) => {
+    e.preventDefault();
+    
+    if (!manufactureImage) {
+      alert('Please upload a product image');
+      return;
+    }
+    
+    if (!selectedMaterial) {
+      alert('No material selected');
+      return;
+    }
+    
+    setLoading(true);
+    
+    try {
+      const formData = new FormData();
+      formData.append('name', manufactureFormData.name);
+      formData.append('description', manufactureFormData.description);
+      formData.append('quantity', manufactureFormData.quantity);
+      formData.append('price', manufactureFormData.price);
+      formData.append('materialId', selectedMaterial._id);
+      formData.append('image', manufactureImage);
+      
+      const response = await fetch(`${API_URL}/manufacturer/create-product`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to create product');
+      }
+      
+      const newProduct = await response.json();
+      console.log('✅ Product manufactured successfully:', newProduct);
+      
+      alert(`✅ Successfully created "${manufactureFormData.name}"!`);
+      
+      // Reset form and close modal
+      setShowManufactureModal(false);
+      setManufactureFormData({ name: '', description: '', quantity: '', price: '' });
+      setManufactureImage(null);
+      setSelectedMaterial(null);
+      
+      // Refresh data
+      await fetchBoughtMaterials();
+      await fetchManufacturedProducts();
+      
+    } catch (err) {
+      console.error('Error manufacturing product:', err);
+      alert(`❌ ${err.message || 'Failed to create product'}`);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -577,14 +663,21 @@ export default function ManufacturerDashboard() {
               className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition font-medium ${activeTab === 'marketplace' ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-600 hover:bg-gray-50'}`}
             >
               <ShoppingCart size={20} />
-              <span>Marketplace</span>
+              <span>Supplier Marketplace</span>
             </button>
             <button 
-              onClick={() => setActiveTab('purchased')} 
-              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition font-medium ${activeTab === 'purchased' ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-600 hover:bg-gray-50'}`}
+              onClick={() => setActiveTab('bought')} 
+              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition font-medium ${activeTab === 'bought' ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-600 hover:bg-gray-50'}`}
             >
               <Package size={20} />
-              <span>Purchased Materials</span>
+              <span>Bought Materials</span>
+            </button>
+            <button 
+              onClick={() => setActiveTab('products')} 
+              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition font-medium ${activeTab === 'products' ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-600 hover:bg-gray-50'}`}
+            >
+              <Boxes size={20} />
+              <span>My Products</span>
             </button>
             <button 
               onClick={() => setActiveTab('orders')} 
@@ -681,12 +774,14 @@ export default function ManufacturerDashboard() {
           )}
           <h2 className="text-3xl font-bold text-gray-900">
             {activeTab === 'marketplace' ? (selectedSupplier && selectedSupplier.company ? selectedSupplier.company : 'Supplier Marketplace') : 
-             activeTab === 'purchased' ? 'Purchased Materials' :
+             activeTab === 'bought' ? 'Bought Materials' :
+             activeTab === 'products' ? 'My Products' :
              'Blockchain Transaction Ledger'}
           </h2>
           <p className="text-gray-500">
             {activeTab === 'marketplace' ? 'Real-time Web3 sourcing with MetaMask integration.' : 
-             activeTab === 'purchased' ? 'Materials you have purchased from suppliers.' :
+             activeTab === 'bought' ? 'Materials you have purchased from suppliers. Use these to manufacture new products.' :
+             activeTab === 'products' ? 'Products you have manufactured from raw materials.' :
              'Immutable history of verified blockchain transactions.'}
           </p>
 
@@ -731,11 +826,7 @@ export default function ManufacturerDashboard() {
                         <Package className="text-indigo-600" size={48} />
                       </div>
                       <h3 className="text-2xl font-bold text-gray-900 mb-2">No Materials Available</h3>
-                      <p className="text-gray-500 mb-8">
-                        {materials.length === 0 
-                          ? "You have purchased all available materials or no materials are currently listed." 
-                          : "All materials have been filtered out based on your purchase history."}
-                      </p>
+                      <p className="text-gray-500 mb-8">No materials are currently available in the marketplace.</p>
                       <div className="space-y-4">
                         <button 
                           onClick={fetchMaterials} 
@@ -852,10 +943,10 @@ export default function ManufacturerDashboard() {
                   )}
                 </div>
               )
-            ) : activeTab === 'purchased' ? (
+            ) : activeTab === 'bought' ? (
               /* Purchased Materials View */
               <div className="animate-in fade-in duration-500">
-                {purchasedMaterials.length === 0 ? (
+                {boughtMaterials.length === 0 ? (
                   <div className="text-center py-16">
                     <div className="w-24 h-24 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-6">
                       <Package className="text-gray-400" size={48} />
@@ -872,10 +963,10 @@ export default function ManufacturerDashboard() {
                 ) : (
                   <>
                     <div className="mb-6 text-sm text-gray-600">
-                      Showing {purchasedMaterials.length} purchased materials
+                      Showing {boughtMaterials.length} purchased materials
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                      {purchasedMaterials.map(material => (
+                      {boughtMaterials.map(material => (
                         <div key={material._id} className="bg-white rounded-3xl shadow-sm border overflow-hidden hover:shadow-lg transition">
                           <img src={material.image} className="w-full h-48 object-cover" alt="" />
                           <div className="p-6">
@@ -939,17 +1030,32 @@ export default function ManufacturerDashboard() {
                               </div>
                             </div>
 
-                            {material.txHash && (
-                              <a
-                                href={`https://etherscan.io/tx/${material.txHash}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="flex items-center justify-center space-x-2 w-full bg-indigo-50 text-indigo-600 px-4 py-2.5 rounded-lg font-semibold hover:bg-indigo-100 transition"
-                              >
-                                <ExternalLink size={16} />
-                                <span>View on Blockchain</span>
-                              </a>
-                            )}
+                            <div className="space-y-2">
+                              {material.status === 'available' && (
+                                <button
+                                  onClick={() => {
+                                    setSelectedMaterial(material);
+                                    setShowManufactureModal(true);
+                                  }}
+                                  className="flex items-center justify-center space-x-2 w-full bg-green-600 text-white px-4 py-2.5 rounded-lg font-semibold hover:bg-green-700 transition"
+                                >
+                                  <Factory size={16} />
+                                  <span>Create Product</span>
+                                </button>
+                              )}
+                              
+                              {material.txHash && (
+                                <a
+                                  href={`https://etherscan.io/tx/${material.txHash}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="flex items-center justify-center space-x-2 w-full bg-indigo-50 text-indigo-600 px-4 py-2.5 rounded-lg font-semibold hover:bg-indigo-100 transition"
+                                >
+                                  <ExternalLink size={16} />
+                                  <span>View on Blockchain</span>
+                                </a>
+                              )}
+                            </div>
                           </div>
                         </div>
                       ))}
@@ -957,7 +1063,7 @@ export default function ManufacturerDashboard() {
                   </>
                 )}
               </div>
-            ) : (
+            ) : activeTab === 'orders' ? (
               /* Ledger View */
               <div className="bg-white rounded-[32px] shadow-sm border border-gray-200 overflow-hidden animate-in fade-in duration-500">
                 {purchases.length === 0 ? (
@@ -1018,7 +1124,76 @@ export default function ManufacturerDashboard() {
                   </div>
                 )}
               </div>
-            )}
+            ) : activeTab === 'products' ? (
+              /* My Products Section */
+              <div className="animate-in fade-in duration-500">
+                {manufacturedProducts.length === 0 ? (
+                  <div className="text-center py-16">
+                    <div className="w-24 h-24 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-6">
+                      <Boxes className="text-gray-400" size={48} />
+                    </div>
+                    <h3 className="text-2xl font-bold text-gray-900 mb-2">No Products Yet</h3>
+                    <p className="text-gray-500 mb-8">You haven't manufactured any products. Buy materials and create your first product!</p>
+                    <button 
+                      onClick={() => setActiveTab('bought')} 
+                      className="px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition"
+                    >
+                      View Bought Materials
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="mb-6 text-sm text-gray-600">
+                      Showing {manufacturedProducts.length} manufactured products
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                      {manufacturedProducts.map(product => (
+                        <div key={product._id} className="bg-white rounded-3xl shadow-sm border overflow-hidden hover:shadow-lg transition">
+                          <img src={product.image} className="w-full h-48 object-cover" alt="" />
+                          <div className="p-6">
+                            <h4 className="text-lg font-bold text-gray-900 mb-2">{product.name}</h4>
+                            <p className="text-sm text-gray-600 mb-4">{product.description}</p>
+                            
+                            <div className="space-y-2 mb-4">
+                              <div className="flex items-center justify-between text-sm">
+                                <span className="text-gray-500">Quantity:</span>
+                                <span className="font-bold text-gray-900">{product.quantity} {product.unit || 'units'}</span>
+                              </div>
+                              <div className="flex items-center justify-between text-sm">
+                                <span className="text-gray-500">Price:</span>
+                                <span className="font-bold text-green-600">₹{product.price}</span>
+                              </div>
+                              <div className="flex items-center justify-between text-sm">
+                                <span className="text-gray-500">Status:</span>
+                                <span className={`px-2 py-1 rounded-full text-xs font-bold ${
+                                  product.status === 'active' ? 'bg-green-100 text-green-700' :
+                                  product.status === 'sold_out' ? 'bg-red-100 text-red-700' :
+                                  'bg-gray-100 text-gray-700'
+                                }`}>
+                                  {product.status}
+                                </span>
+                              </div>
+                            </div>
+                            
+                            {product.txHash && (
+                              <a
+                                href={`https://etherscan.io/tx/${product.txHash}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center space-x-2 text-indigo-600 hover:text-indigo-800 text-xs"
+                              >
+                                <ExternalLink size={12} />
+                                <span>View on Blockchain</span>
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : null}
           </>
         )}
       </div>
@@ -1201,6 +1376,92 @@ export default function ManufacturerDashboard() {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Manufacture Product Modal */}
+      {showManufactureModal && selectedMaterial && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[100] backdrop-blur-sm">
+          <div className="bg-white rounded-3xl p-8 max-w-md w-full relative max-h-[90vh] overflow-y-auto">
+            <button 
+              onClick={() => {
+                setShowManufactureModal(false);
+                setSelectedMaterial(null);
+                setManufactureFormData({ name: '', description: '', quantity: '', price: '' });
+                setManufactureImage(null);
+              }}
+              className="absolute top-5 right-5 text-gray-400 hover:text-gray-600"
+            >
+              <X size={24} />
+            </button>
+            
+            <h3 className="text-2xl font-bold mb-6">Create New Product</h3>
+            <p className="text-sm text-gray-600 mb-4">Manufacturing from: <span className="font-semibold text-gray-900">{selectedMaterial.productName}</span></p>
+
+            <form onSubmit={handleManufactureProduct} className="space-y-4">
+              <input
+                type="text"
+                placeholder="Product Name"
+                value={manufactureFormData.name}
+                onChange={(e) => setManufactureFormData({...manufactureFormData, name: e.target.value})}
+                required
+                className="w-full p-4 border rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              
+              <textarea
+                placeholder="Product Description"
+                value={manufactureFormData.description}
+                onChange={(e) => setManufactureFormData({...manufactureFormData, description: e.target.value})}
+                required
+                rows={3}
+                className="w-full p-4 border rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+              />
+              
+              <div className="grid grid-cols-2 gap-4">
+                <input
+                  type="number"
+                  placeholder="Quantity"
+                  value={manufactureFormData.quantity}
+                  onChange={(e) => setManufactureFormData({...manufactureFormData, quantity: e.target.value})}
+                  required
+                  min="1"
+                  className="w-full p-4 border rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                <input
+                  type="number"
+                  placeholder="Price (₹)"
+                  value={manufactureFormData.price}
+                  onChange={(e) => setManufactureFormData({...manufactureFormData, price: e.target.value})}
+                  required
+                  min="0"
+                  step="0.01"
+                  className="w-full p-4 border rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+              
+              <div className="border-2 border-dashed p-6 rounded-2xl text-center cursor-pointer hover:bg-gray-50">
+                <input
+                  type="file"
+                  onChange={(e) => setManufactureImage(e.target.files[0])}
+                  className="hidden"
+                  id="manufacture-image-upload"
+                  accept="image/*"
+                />
+                <label htmlFor="manufacture-image-upload" className="cursor-pointer">
+                  <Package className="mx-auto text-indigo-600 mb-2" size={32} />
+                  <span className="text-sm font-semibold">{manufactureImage ? manufactureImage.name : 'Upload Product Image'}</span>
+                </label>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-bold hover:bg-indigo-700 disabled:bg-indigo-300 disabled:cursor-not-allowed"
+              >
+                {loading ? 'Creating...' : 'Create Product'}
+              </button>
+            </form>
           </div>
         </div>
       )}
