@@ -208,7 +208,12 @@ const manufacturedProductSchema = new mongoose.Schema({
   },
   manufacturerName: { type: String, required: true },
   company: { type: String, required: true },
-  txHash: { type: String, required: true, unique: true },
+  
+  // Array to store names of materials used in combination
+  usedMaterials: { 
+    type: [String], 
+    default: [] 
+  },
   status: { 
     type: String, 
     enum: ['active', 'sold_out', 'discontinued'], 
@@ -1231,6 +1236,111 @@ apiRouter.delete(
       console.error('❌ Error deleting purchase:', err);
       res.status(500).json({ 
         message: 'Error deleting purchase', 
+        error: err.message 
+      });
+    }
+  }
+);
+
+
+// MANUFACTURER: Manufacture product from combined materials (2-3 materials)
+apiRouter.post(
+  '/manufacturer/manufacture-combined',
+  authenticateToken,
+  authorizeRole('manufacturers'),
+  upload.single('image'),
+  async (req, res) => {
+    try {
+      const { name, description, quantity, price, materialIds } = req.body;
+      
+      console.log('🏭 Combined manufacturing request:', {
+        name,
+        quantity,
+        price,
+        materialIds,
+        manufacturer: req.user.email
+      });
+
+      if (!name || !description || !quantity || !price || !materialIds) {
+        return res.status(400).json({ 
+          message: 'All fields are required including material IDs' 
+        });
+      }
+
+      // Parse material IDs
+      const parsedMaterialIds = JSON.parse(materialIds);
+      
+      if (!Array.isArray(parsedMaterialIds) || parsedMaterialIds.length < 2 || parsedMaterialIds.length > 3) {
+        return res.status(400).json({ 
+          message: 'You must select 2-3 materials to combine' 
+        });
+      }
+
+      // Find all selected materials
+      const materials = await PurchasedMaterial.find({
+        _id: { $in: parsedMaterialIds },
+        manufacturerId: req.user.id,
+        status: 'available'
+      });
+
+      if (materials.length !== parsedMaterialIds.length) {
+        return res.status(404).json({ 
+          message: 'Some materials not found or already used' 
+        });
+      }
+
+      // Get manufacturer details
+      const manufacturer = await User.findById(req.user.id);
+      if (!manufacturer) {
+        return res.status(404).json({ message: 'Manufacturer not found' });
+      }
+
+      // Use location from first material
+      const location = materials[0].location;
+
+      // Generate a unique transaction hash for the manufactured product
+      const txHash = `mfg-combined-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+      // Create manufactured product
+      const manufacturedProduct = new ManufacturedProduct({
+        name,
+        description,
+        price: parseFloat(price),
+        quantity: parseInt(quantity),
+        image: req.file ? req.file.path : materials[0].image,
+        location,
+        materialId: materials[0]._id,
+        manufacturerId: manufacturer._id,
+        manufacturerName: manufacturer.name,
+        company: manufacturer.company,
+        txHash,
+        status: 'active',
+        usedMaterials: materials.map(m => m.productName)
+      });
+
+      await manufacturedProduct.save();
+
+      // Mark all used materials as 'used'
+      await PurchasedMaterial.updateMany(
+        { _id: { $in: parsedMaterialIds } },
+        { $set: { status: 'used' } }
+      );
+
+      console.log('✅ Combined product manufactured:', {
+        product: manufacturedProduct.name,
+        materials: materials.map(m => m.productName),
+        manufacturer: manufacturer.email
+      });
+
+      res.status(201).json({
+        message: 'Product manufactured successfully from combined materials',
+        product: manufacturedProduct
+      });
+
+    } catch (err) {
+      console.error('❌ Combined manufacturing error:', err);
+      res.status(500).json({ 
+        message: 'Error manufacturing combined product', 
         error: err.message 
       });
     }
