@@ -3,7 +3,7 @@ import {
   Package, Shield, TrendingUp, Users, Search, Scan, CheckCircle, 
   ArrowRight, Globe, Lock, Zap, LogOut, ShoppingBag, Filter, Wallet,
   ShieldCheck, Database, CheckCircle2, Link as LinkIcon, Clock, AlertCircle,
-  RefreshCw, ShoppingCart, Factory, ChevronRight
+  RefreshCw, ShoppingCart, Factory, ChevronRight, Truck
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -192,56 +192,66 @@ export default function MainWebsite() {
             <div className="hidden md:flex space-x-8">
               <button
                 onClick={() => scrollToSection('home')}
-                className={`font-medium transition ${activeSection === 'home' ? 'text-blue-600' : 'text-gray-700 hover:text-blue-600'}`}
+                className={`${activeSection === 'home' ? 'text-blue-600' : 'text-gray-700'} hover:text-blue-600 font-medium transition`}
               >
                 Home
               </button>
-              {user?.role === 'customers' && (
-                <button
-                  onClick={() => navigate('/customer/products')}
-                  className={`font-medium transition ${activeSection === 'products' ? 'text-blue-600' : 'text-gray-700 hover:text-blue-600'}`}
-                >
-                  Products
-                </button>
-              )}
+              <button
+                onClick={() => navigate('/customer/products')}
+                className="text-gray-700 hover:text-blue-600 font-medium transition flex items-center gap-2"
+              >
+                <Search size={18} />
+                Search Products
+              </button>
+              <button
+                onClick={() => navigate('/customer/orders')}
+                className="text-gray-700 hover:text-blue-600 font-medium transition flex items-center gap-2"
+              >
+                <Truck size={18} />
+                Orders
+              </button>
               <button
                 onClick={() => scrollToSection('features')}
-                className={`font-medium transition ${activeSection === 'features' ? 'text-blue-600' : 'text-gray-700 hover:text-blue-600'}`}
+                className={`${activeSection === 'features' ? 'text-blue-600' : 'text-gray-700'} hover:text-blue-600 font-medium transition`}
               >
                 Features
               </button>
               <button
                 onClick={() => scrollToSection('how-it-works')}
-                className={`font-medium transition ${activeSection === 'how-it-works' ? 'text-blue-600' : 'text-gray-700 hover:text-blue-600'}`}
+                className={`${activeSection === 'how-it-works' ? 'text-blue-600' : 'text-gray-700'} hover:text-blue-600 font-medium transition`}
               >
                 How It Works
               </button>
-              <button
-                onClick={() => scrollToSection('verify')}
-                className={`font-medium transition ${activeSection === 'verify' ? 'text-blue-600' : 'text-gray-700 hover:text-blue-600'}`}
-              >
-                Verify Product
-              </button>
             </div>
-            {user ? (
-              <div className="flex items-center space-x-4">
-                <div className="text-right hidden sm:block">
-                  <div className="font-semibold text-gray-900">{user.name}</div>
-                  <div className="text-sm text-gray-600 capitalize">{user.role}</div>
-                </div>
-                <button
-                  onClick={handleLogout}
-                  className="flex items-center space-x-2 px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg transition"
+            <div className="flex items-center space-x-4">
+              {user ? (
+                <>
+                  <div className="hidden md:flex items-center space-x-3">
+                    <div className="text-right">
+                      <p className="text-sm font-semibold text-gray-900">{user.name}</p>
+                      <p className="text-xs text-gray-600 capitalize">{user.role}</p>
+                    </div>
+                    <div className="w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center text-white font-bold">
+                      {user.name.charAt(0).toUpperCase()}
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleLogout}
+                    className="px-4 py-2 text-gray-700 hover:text-red-600 transition flex items-center space-x-2"
+                  >
+                    <LogOut size={18} />
+                    <span>Logout</span>
+                  </button>
+                </>
+              ) : (
+                <a
+                  href="/login"
+                  className="px-6 py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition"
                 >
-                  <LogOut size={18} />
-                  <span>Logout</span>
-                </button>
-              </div>
-            ) : (
-              <a href="/login" className="px-6 py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition">
-                Login
-              </a>
-            )}
+                  Sign In
+                </a>
+              )}
+            </div>
           </div>
         </div>
       </nav>
@@ -252,75 +262,98 @@ export default function MainWebsite() {
           <div className="grid md:grid-cols-2 gap-12 items-center">
             <div>
               <h1 className="text-5xl md:text-6xl font-bold text-gray-900 mb-6 leading-tight">
-                Trust Every Step of Your Supply Chain
+                Track Every Step of Your Supply Chain
               </h1>
               <p className="text-xl text-gray-600 mb-8">
-                Blockchain-powered transparency from origin to consumer. Track, verify, and trust every product in real-time.
+                Blockchain-powered transparency ensuring product authenticity from manufacturer to your doorstep.
               </p>
               <div className="flex flex-wrap gap-4">
-                {user?.role === 'customers' ? (
-                  <button
-                    onClick={() => navigate('/customer/products')}
-                    className="px-8 py-4 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition flex items-center"
-                  >
-                    Browse Products <ArrowRight className="ml-2" size={20} />
-                  </button>
+                {user && user.role === 'customers' ? (
+                  <>
+                    <button
+                      onClick={() => navigate('/customer/products')}
+                      className="px-8 py-4 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition flex items-center"
+                    >
+                      Browse Products
+                      <ArrowRight className="ml-2" size={20} />
+                    </button>
+                    <button
+                      onClick={() => navigate('/customer/orders')}
+                      className="px-8 py-4 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:border-blue-600 hover:text-blue-600 transition"
+                    >
+                      View Orders
+                    </button>
+                  </>
                 ) : (
-                  <button
-                    onClick={() => scrollToSection('how-it-works')}
-                    className="px-8 py-4 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition flex items-center"
-                  >
-                    Browse Products <ArrowRight className="ml-2" size={20} />
-                  </button>
+                  <>
+                    <button
+                      onClick={() => scrollToSection('verify')}
+                      className="px-8 py-4 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition flex items-center"
+                    >
+                      Verify Product
+                      <ArrowRight className="ml-2" size={20} />
+                    </button>
+                    <button
+                      onClick={() => scrollToSection('how-it-works')}
+                      className="px-8 py-4 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:border-blue-600 hover:text-blue-600 transition"
+                    >
+                      Learn More
+                    </button>
+                  </>
                 )}
-                <button
-                  onClick={() => scrollToSection('how-it-works')}
-                  className="px-8 py-4 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:border-blue-600 hover:text-blue-600 transition"
-                >
-                  Learn More
-                </button>
               </div>
-              <div className="mt-8 flex items-center space-x-8">
+
+              {/* Quick Stats */}
+              <div className="mt-12 grid grid-cols-3 gap-6">
                 <div>
                   <div className="text-3xl font-bold text-blue-600">10K+</div>
-                  <div className="text-gray-600">Products Tracked</div>
+                  <div className="text-sm text-gray-600">Products Tracked</div>
                 </div>
                 <div>
                   <div className="text-3xl font-bold text-blue-600">500+</div>
-                  <div className="text-gray-600">Verified Partners</div>
+                  <div className="text-sm text-gray-600">Active Partners</div>
                 </div>
                 <div>
                   <div className="text-3xl font-bold text-blue-600">99.9%</div>
-                  <div className="text-gray-600">Accuracy</div>
+                  <div className="text-sm text-gray-600">Accuracy Rate</div>
                 </div>
               </div>
             </div>
+
+            {/* Hero Image/Illustration */}
             <div className="relative">
-              <div className="bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl p-8 shadow-2xl">
-                <div className="bg-white rounded-xl p-6 space-y-4">
-                  <div className="flex items-center space-x-3">
-                    <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
-                      <CheckCircle className="text-green-600" size={24} />
+              <div className="bg-gradient-to-br from-blue-600 to-indigo-700 rounded-2xl p-8 shadow-2xl">
+                <div className="bg-white/10 backdrop-blur-sm rounded-xl p-6 mb-4">
+                  <div className="flex items-center space-x-3 mb-3">
+                    <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center">
+                      <Package className="text-blue-600" size={24} />
                     </div>
-                    <div>
-                      <div className="font-semibold text-gray-900">Product Verified</div>
-                      <div className="text-sm text-gray-600">Organic Strawberries</div>
-                    </div>
-                  </div>
-                  <div className="space-y-2 pl-6 border-l-2 border-blue-200">
-                    <div className="text-sm">
-                      <div className="font-medium text-gray-700">✓ Harvested: Smith Farm, CA</div>
-                      <div className="text-gray-500">2 days ago</div>
-                    </div>
-                    <div className="text-sm">
-                      <div className="font-medium text-gray-700">✓ Temperature: 4.5°C</div>
-                      <div className="text-gray-500">Within safe range</div>
-                    </div>
-                    <div className="text-sm">
-                      <div className="font-medium text-gray-700">✓ Certified Organic</div>
-                      <div className="text-gray-500">USDA Verified</div>
+                    <div className="text-white">
+                      <div className="font-bold">Product #12345</div>
+                      <div className="text-sm text-blue-100">Organic Coffee Beans</div>
                     </div>
                   </div>
+                  <div className="space-y-2">
+                    <div className="flex items-center text-white text-sm">
+                      <CheckCircle className="mr-2 text-green-400" size={16} />
+                      Manufacturer Verified
+                    </div>
+                    <div className="flex items-center text-white text-sm">
+                      <CheckCircle className="mr-2 text-green-400" size={16} />
+                      Quality Checked
+                    </div>
+                    <div className="flex items-center text-white text-sm">
+                      <CheckCircle className="mr-2 text-green-400" size={16} />
+                      In Transit
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Blockchain visualization */}
+                <div className="grid grid-cols-4 gap-2">
+                  {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
+                    <div key={i} className="bg-white/20 backdrop-blur-sm h-12 rounded animate-pulse" style={{ animationDelay: `${i * 0.1}s` }}></div>
+                  ))}
                 </div>
               </div>
             </div>
@@ -328,191 +361,21 @@ export default function MainWebsite() {
         </div>
       </section>
 
-      {/* Products CTA Section - UPDATED */}
-      {user?.role === 'customers' && (
-        <section id="products" className="py-20 px-6 bg-white">
-          <div className="max-w-7xl mx-auto">
-            <div className="text-center mb-12">
-              <h2 className="text-4xl font-bold text-gray-900 mb-4">Shop Blockchain-Verified Products</h2>
-              <p className="text-xl text-gray-600">Purchase products with complete supply chain transparency</p>
-            </div>
-
-            {/* Products Preview Grid */}
-            {loading ? (
-              <div className="flex items-center justify-center h-64">
-                <LoaderCircle className="animate-spin text-blue-600" size={48} />
-              </div>
-            ) : products.length > 0 ? (
-              <div className="mb-12">
-                <h3 className="text-2xl font-bold text-gray-900 mb-6">Featured Products</h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  {products.slice(0, 3).map(product => (
-                    <div key={product._id} className="bg-white rounded-2xl shadow-sm border overflow-hidden hover:shadow-lg transition">
-                      <div className="p-6">
-                        <div className="flex items-center justify-between mb-4">
-                          <Package className="text-blue-600" size={32} />
-                          <span className={`px-3 py-1 rounded-full text-xs font-bold ${product.quantity > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                            {product.quantity > 0 ? `${product.quantity} in stock` : 'Sold Out'}
-                          </span>
-                        </div>
-                        <h4 className="text-xl font-bold text-gray-900 mb-2">{product.name}</h4>
-                        <p className="text-sm text-gray-600 mb-4 line-clamp-2">{product.description}</p>
-                        <div className="mb-4">
-                          <p className="text-[10px] font-bold text-gray-400 uppercase">Manufacturer</p>
-                          <p className="text-sm font-semibold">{product.company || product.manufacturerName}</p>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <p className="text-[10px] font-bold text-gray-400 uppercase">Price</p>
-                            <p className="text-2xl font-black text-gray-900">${product.price}</p>
-                          </div>
-                          <button 
-                            onClick={() => navigate('/customer/products')}
-                            className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition flex items-center space-x-2"
-                          >
-                            <span>View Details</span>
-                            <ArrowRight size={18} />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div className="mb-12 bg-white p-12 rounded-2xl border-2 border-dashed border-gray-200 text-center">
-                <Factory className="mx-auto text-gray-300 mb-4" size={64} />
-                <p className="text-gray-600">No products available yet. Manufacturers are creating blockchain-verified products.</p>
-              </div>
-            )}
-
-            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-3xl p-8 md:p-12">
-              <div className="grid md:grid-cols-2 gap-8 items-center">
-                <div>
-                  <h3 className="text-3xl font-bold text-gray-900 mb-4">Ready to Shop?</h3>
-                  <p className="text-gray-600 mb-6">
-                    Browse our collection of blockchain-verified products. Each product comes with a complete,
-                    immutable history from manufacturer to shelf.
-                  </p>
-                  <div className="space-y-4">
-                    <div className="flex items-start space-x-3">
-                      <CheckCircle className="text-green-500 mt-0.5" size={20} />
-                      <div>
-                        <p className="font-medium text-gray-900">Full Transparency</p>
-                        <p className="text-sm text-gray-600">View complete supply chain history</p>
-                      </div>
-                    </div>
-                    <div className="flex items-start space-x-3">
-                      <CheckCircle className="text-green-500 mt-0.5" size={20} />
-                      <div>
-                        <p className="font-medium text-gray-900">Blockchain Verified</p>
-                        <p className="text-sm text-gray-600">Every transaction recorded on-chain</p>
-                      </div>
-                    </div>
-                    <div className="flex items-start space-x-3">
-                      <CheckCircle className="text-green-500 mt-0.5" size={20} />
-                      <div>
-                        <p className="font-medium text-gray-900">Secure Payments</p>
-                        <p className="text-sm text-gray-600">Pay with MetaMask for added security</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <div className="text-center">
-                  <div className="inline-block bg-white p-8 rounded-2xl shadow-lg">
-                    <ShoppingBag className="mx-auto text-blue-600 mb-4" size={64} />
-                    <h4 className="text-2xl font-bold text-gray-900 mb-2">Marketplace Access</h4>
-                    <p className="text-gray-600 mb-6">Connect your wallet to start shopping</p>
-                    <button
-                      onClick={() => navigate('/customer/products')}
-                      className="w-full px-8 py-4 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition flex items-center justify-center space-x-2"
-                    >
-                      <span>Go to Marketplace</span>
-                      <ChevronRight size={20} />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Recent Purchase History */}
-            {purchases.length > 0 && (
-              <div className="mt-16">
-                <h3 className="text-2xl font-bold text-gray-900 mb-6">Your Recent Purchases</h3>
-                <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left">
-                      <thead className="bg-gray-50 border-b border-gray-100">
-                        <tr>
-                          <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Product</th>
-                          <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Manufacturer</th>
-                          <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest">Amount</th>
-                          <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-widest text-right">Date</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-50">
-                        {purchases.slice(0, 3).map(purchase => (
-                          <tr key={purchase._id} className="hover:bg-blue-50/30 transition">
-                            <td className="px-6 py-4">
-                              <div className="font-bold text-gray-900">{purchase.productName}</div>
-                              {purchase.txHash && (
-                                <a 
-                                  href={`https://etherscan.io/tx/${purchase.txHash}`} 
-                                  target="_blank" 
-                                  rel="noreferrer"
-                                  className="flex items-center space-x-1 text-blue-600 hover:underline text-xs"
-                                >
-                                  <LinkIcon size={10} />
-                                  <span>View on Blockchain</span>
-                                </a>
-                              )}
-                            </td>
-                            <td className="px-6 py-4 text-sm text-gray-600">{purchase.sellerName}</td>
-                            <td className="px-6 py-4 font-bold text-gray-900">${purchase.amount}</td>
-                            <td className="px-6 py-4 text-right">
-                              <div className="flex items-center justify-end text-xs text-gray-400">
-                                <Clock size={12} className="mr-1" />
-                                {new Date(purchase.timestamp).toLocaleDateString()}
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    {purchases.length > 3 && (
-                      <div className="p-4 text-center border-t border-gray-100">
-                        <button
-                          onClick={() => navigate('/customer/products')}
-                          className="text-blue-600 hover:text-blue-700 font-medium flex items-center justify-center space-x-1 mx-auto"
-                        >
-                          <span>View all {purchases.length} purchases</span>
-                          <ChevronRight size={16} />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </section>
-      )}
-
       {/* Features Section */}
       <section id="features" className="py-20 px-6 bg-white">
         <div className="max-w-7xl mx-auto">
           <div className="text-center mb-16">
             <h2 className="text-4xl font-bold text-gray-900 mb-4">Why Choose ChainTrack?</h2>
-            <p className="text-xl text-gray-600">Blockchain technology meets supply chain management</p>
+            <p className="text-xl text-gray-600">Enterprise-grade blockchain technology made simple</p>
           </div>
           <div className="grid md:grid-cols-3 gap-8">
             <div className="p-8 border border-gray-200 rounded-xl hover:shadow-lg transition">
               <div className="w-14 h-14 bg-blue-100 rounded-lg flex items-center justify-center mb-4">
                 <Shield className="text-blue-600" size={28} />
               </div>
-              <h3 className="text-xl font-bold text-gray-900 mb-3">100% Transparency</h3>
+              <h3 className="text-xl font-bold text-gray-900 mb-3">Immutable Records</h3>
               <p className="text-gray-600">
-                Every step recorded on blockchain. Immutable, tamper-proof records you can trust.
+                Every transaction recorded permanently on the blockchain. No tampering, complete transparency.
               </p>
             </div>
             <div className="p-8 border border-gray-200 rounded-xl hover:shadow-lg transition">
@@ -521,7 +384,7 @@ export default function MainWebsite() {
               </div>
               <h3 className="text-xl font-bold text-gray-900 mb-3">Real-Time Tracking</h3>
               <p className="text-gray-600">
-                Monitor your products 24/7. Get instant updates on location, temperature, and status.
+                Monitor your products at every stage. Live updates from manufacturing to delivery.
               </p>
             </div>
             <div className="p-8 border border-gray-200 rounded-xl hover:shadow-lg transition">
@@ -530,25 +393,25 @@ export default function MainWebsite() {
               </div>
               <h3 className="text-xl font-bold text-gray-900 mb-3">Multi-Stakeholder</h3>
               <p className="text-gray-600">
-                Seamless collaboration between manufacturers, logistics, warehouses, and retailers.
-              </p>
-            </div>
-            <div className="p-8 border border-gray-200 rounded-xl hover:shadow-lg transition">
-              <div className="w-14 h-14 bg-yellow-100 rounded-lg flex items-center justify-center mb-4">
-                <Zap className="text-yellow-600" size={28} />
-              </div>
-              <h3 className="text-xl font-bold text-gray-900 mb-3">Smart Automation</h3>
-              <p className="text-gray-600">
-                Automated payments, alerts, and quality checks powered by smart contracts.
+                Connect suppliers, manufacturers, distributors, and customers in one ecosystem.
               </p>
             </div>
             <div className="p-8 border border-gray-200 rounded-xl hover:shadow-lg transition">
               <div className="w-14 h-14 bg-red-100 rounded-lg flex items-center justify-center mb-4">
                 <Lock className="text-red-600" size={28} />
               </div>
-              <h3 className="text-xl font-bold text-gray-900 mb-3">Anti-Counterfeit</h3>
+              <h3 className="text-xl font-bold text-gray-900 mb-3">Secure & Private</h3>
               <p className="text-gray-600">
-                Verify authenticity instantly. Protect your brand and customers from fake products.
+                Military-grade encryption. Your data is protected with the latest security protocols.
+              </p>
+            </div>
+            <div className="p-8 border border-gray-200 rounded-xl hover:shadow-lg transition">
+              <div className="w-14 h-14 bg-yellow-100 rounded-lg flex items-center justify-center mb-4">
+                <Zap className="text-yellow-600" size={28} />
+              </div>
+              <h3 className="text-xl font-bold text-gray-900 mb-3">Lightning Fast</h3>
+              <p className="text-gray-600">
+                Instant verification and updates. No waiting, no delays in tracking your products.
               </p>
             </div>
             <div className="p-8 border border-gray-200 rounded-xl hover:shadow-lg transition">

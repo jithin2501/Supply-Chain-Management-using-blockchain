@@ -2,11 +2,13 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import MainWebsite from './components/MainWebsite';
 import CustomerProductsPage from './components/CustomerProductsPage';
+import CustomerOrdersPage from './components/CustomerOrdersPage';
 import LoginPage from './components/LoginPage';
 import AdminDashboard from './components/AdminDashboard';
 import SupplierDashboard from './components/SupplierDashboard';
 import ManufacturerDashboard from './components/ManufacturerDashboard';
 import ProductsDashboard from './components/ProductsDashboard';
+import DeliveryPartnerDashboard from './components/DeliveryPartnerDashboard';
 
 // Private Route Component for role-based access
 const PrivateRoute = ({ children, allowedRoles }) => {
@@ -22,7 +24,8 @@ const PrivateRoute = ({ children, allowedRoles }) => {
       admin: '/admin/dashboard',
       suppliers: '/supplier/dashboard',
       manufacturers: '/manufacturer/dashboard',
-      customers: '/main'
+      customers: '/main',
+      delivery_partner: '/delivery/dashboard'
     };
     return <Navigate to={redirectMap[user.role] || '/login'} />;
   }
@@ -43,7 +46,8 @@ const MainWebsiteRoute = ({ children }) => {
     const redirectMap = {
       admin: '/admin/dashboard',
       suppliers: '/supplier/dashboard',
-      manufacturers: '/manufacturer/dashboard'
+      manufacturers: '/manufacturer/dashboard',
+      delivery_partner: '/delivery/dashboard'
     };
     return <Navigate to={redirectMap[user.role] || '/login'} />;
   }
@@ -88,6 +92,15 @@ const App = () => {
             </PrivateRoute>
           } 
         />
+
+        <Route 
+          path="/customer/orders" 
+          element={
+            <PrivateRoute allowedRoles={['customers']}>
+              <CustomerOrdersPage />
+            </PrivateRoute>
+          } 
+        />
         
         {/* Admin Routes */}
         <Route 
@@ -128,6 +141,16 @@ const App = () => {
           } 
         />
 
+        {/* Delivery Partner Routes */}
+        <Route 
+          path="/delivery/dashboard" 
+          element={
+            <PrivateRoute allowedRoles={['delivery_partner']}>
+              <DeliveryPartnerDashboard />
+            </PrivateRoute>
+          } 
+        />
+
         {/* Fallback Routes */}
         <Route path="/dashboard" element={
           <AuthenticatedRoute>
@@ -159,6 +182,12 @@ const App = () => {
                     className="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700"
                   >
                     Customer Main Website
+                  </button>
+                  <button 
+                    onClick={() => window.location.href = '/delivery/dashboard'}
+                    className="px-6 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700"
+                  >
+                    Delivery Partner Dashboard
                   </button>
                 </div>
               </div>

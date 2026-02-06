@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   ShoppingCart, Package, LogOut, Search, ArrowLeft, 
   Star, Plus, Minus, X, Trash2, Wallet, ShieldCheck,
-  Database, CheckCircle2
+  Database, CheckCircle2, MapPin, User, Phone
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -19,12 +19,23 @@ export default function CustomerProductsPage() {
   const [cart, setCart] = useState([]);
   const [showCart, setShowCart] = useState(false);
   const [showCheckout, setShowCheckout] = useState(false);
+  const [showAddressModal, setShowAddressModal] = useState(false);
   
   // MetaMask & Transaction states
   const [account, setAccount] = useState(null);
   const [isMetaMaskInstalled, setIsMetaMaskInstalled] = useState(false);
   const [txStatus, setTxStatus] = useState(null);
   const [txStep, setTxStep] = useState(0);
+
+  // Delivery Address
+  const [deliveryAddress, setDeliveryAddress] = useState({
+    name: '',
+    phone: '',
+    street: '',
+    city: '',
+    state: '',
+    pincode: ''
+  });
 
   const token = localStorage.getItem('token');
   const user = JSON.parse(localStorage.getItem('user') || '{}');
@@ -206,60 +217,90 @@ export default function CustomerProductsPage() {
     }
   };
 
-
   const handleCheckout = async () => {
     if (!account) {
       await connectWallet();
       return;
     }
 
+    // Show address modal first
     setShowCart(false);
+    setShowAddressModal(true);
+  };
+
+  const proceedToPayment = () => {
+    // Validate address
+    if (!deliveryAddress.name || !deliveryAddress.phone || !deliveryAddress.street || 
+        !deliveryAddress.city || !deliveryAddress.state || !deliveryAddress.pincode) {
+      alert('Please fill in all delivery address fields');
+      return;
+    }
+
+    setShowAddressModal(false);
     setShowCheckout(true);
+    processPayment();
+  };
+
+  const processPayment = async () => {
     setTxStatus('processing');
     setTxStep(0);
 
     try {
-      // Step 1: Connect MetaMask
-      setTxStep(0);
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      // Step 2: Request signature
       setTxStep(1);
       
-      // ============= SIMPLIFIED: Use hardcoded wallet like manufacturer dashboard =============
-      // For demo/testing: Use a fixed test wallet address
-      // In production, replace with actual payment processing wallet
-      const primaryManufacturerWallet = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8'; // Test wallet
+      // Check if we have permission to access accounts
+      const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+      if (accounts.length === 0) {
+        await connectWallet();
+        if (!account) {
+          throw new Error("Wallet connection required to proceed with purchase.");
+        }
+      }
+
+      const currentAccount = accounts[0];
+      if (currentAccount !== account) {
+        setAccount(currentAccount);
+        localStorage.setItem(`wallet_${user._id}`, currentAccount);
+      }
+
+      // Check which network we're on
+      const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+      console.log('🌐 Current network chainId:', chainId);
       
+      // Convert total price to ETH (₹1 = 0.000002 ETH - adjust as needed)
       const totalAmount = getTotalPrice();
-      // Convert to ETH (adjust conversion rate: ₹1 = 0.000002 ETH)
       const ethAmount = (totalAmount * 0.000002).toFixed(6);
       const weiAmount = Math.floor(parseFloat(ethAmount) * 1e18);
-      
-      console.log(`💸 Total: ₹${totalAmount} = ${ethAmount} ETH`);
-      console.log(`📤 Sending to test wallet: ${primaryManufacturerWallet}`);
-      // ============= END FIX =============
 
+      setTxStep(2);
+      
+      // Prepare blockchain transaction
+      const transactionParameters = {
+        to: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8', // Platform wallet address
+        from: currentAccount,
+        // eslint-disable-next-line no-undef
+        value: '0x' + BigInt(weiAmount).toString(16),
+        gas: '0x5208', // 21000 gas for simple transfer
+      };
+
+      console.log('📤 Sending transaction:', transactionParameters);
+
+      // Send the blockchain transaction and get the hash
       const txHash = await window.ethereum.request({
         method: 'eth_sendTransaction',
-        params: [{
-          from: account,
-          to: primaryManufacturerWallet, // ✅ NOW USING ACTUAL MANUFACTURER WALLET
-          // eslint-disable-next-line no-undef
-          value: '0x' + BigInt(weiAmount).toString(16),
-          gas: '0x5208',
-        }],
+        params: [transactionParameters],
       });
 
       console.log('✅ Transaction submitted! Hash:', txHash);
+      console.log(`🔗 View on Etherscan: https://sepolia.etherscan.io/tx/${txHash}`);
 
-      // Step 3: Mining
-      setTxStep(2);
+      setTxStep(3);
       
-      // Wait for transaction confirmation
+      // Wait for transaction to be mined
+      console.log('⏳ Waiting for transaction to be mined...');
       let receipt = null;
       let attempts = 0;
-      const maxAttempts = 60;
+      const maxAttempts = 60; // Wait up to 60 seconds
       
       while (!receipt && attempts < maxAttempts) {
         try {
@@ -270,73 +311,101 @@ export default function CustomerProductsPage() {
           
           if (receipt) {
             console.log('✅ Transaction mined!', receipt);
+            
+            // Check if transaction was successful
             if (receipt.status === '0x0') {
               throw new Error('Transaction failed on blockchain');
             }
             break;
           }
           
+          // Wait 1 second before checking again
           await new Promise(resolve => setTimeout(resolve, 1000));
           attempts++;
         } catch (err) {
+          console.log('Checking transaction status...', attempts);
           await new Promise(resolve => setTimeout(resolve, 1000));
           attempts++;
         }
       }
 
-      // Step 4: Finalize
-      setTxStep(3);
-      
-      // Process each item in cart
-      for (const item of cart) {
-        await fetch(`${API_URL}/products/buy-final`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            productId: item._id,
-            quantity: item.quantity,
-            externalTxHash: txHash,
-            blockchainReceipt: receipt,
-            manufacturerWallet: primaryManufacturerWallet
-          })
-        });
+      if (!receipt) {
+        console.log('⚠️ Transaction is taking longer than expected, but it should be confirmed soon.');
+        console.log('Proceeding with order creation...');
       }
 
+      // Step 4: Create order in backend with blockchain transaction hash
+      const orderItems = cart.map(item => ({
+        product: item._id,
+        quantity: item.quantity,
+        price: item.price
+      }));
+
+      const response = await fetch(`${API_URL}/orders/create`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          items: orderItems,
+          totalAmount: getTotalPrice(),
+          deliveryAddress,
+          paymentDetails: {
+            walletAddress: currentAccount,
+            paymentMethod: 'metamask',
+            transactionHash: txHash, // Real blockchain transaction hash
+            blockchainReceipt: receipt,
+            network: chainId,
+            amountInEth: ethAmount,
+            amountInWei: weiAmount.toString()
+          }
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error('❌ Backend error:', errorData);
+        throw new Error(errorData.message || 'Failed to create order');
+      }
+
+      const data = await response.json();
+      console.log('✅ Order created successfully:', data);
+
+      // Success
       setTxStatus('success');
       
-      // Clear cart after successful purchase
+      // Clear cart after 2 seconds and redirect to orders
       setTimeout(() => {
         setCart([]);
+        localStorage.removeItem(`cart_${user._id}`);
         setShowCheckout(false);
         setTxStatus(null);
-        alert(`✅ Purchase completed successfully!\n\n💰 Paid: ${ethAmount} ETH\n🔗 Tx Hash: ${txHash}`);
-        fetchProducts();
+        setTxStep(0);
+        alert(`Order placed successfully!\n\nOrder Number: ${data.orderNumber}\nDelivery OTP: ${data.deliveryOTP}\nTransaction Hash: ${txHash}\n\nPlease save this OTP for delivery verification.`);
+        navigate('/customer/orders');
       }, 2000);
 
-    } catch (err) {
-      console.error('❌ Checkout error:', err);
+    } catch (error) {
+      console.error('❌ Transaction error:', error);
       setTxStatus('error');
-      
-      let errorMessage = 'Transaction failed';
-      
-      if (err.code === 4001) {
-        errorMessage = '❌ Transaction rejected by user';
-      } else if (err.code === -32603) {
-        errorMessage = '❌ Insufficient funds for transaction';
-      } else if (err.code === -32002) {
-        errorMessage = '❌ Transaction request already pending in MetaMask';
-      } else if (err.message) {
-        errorMessage = err.message;
-      }
-      
       setTimeout(() => {
         setShowCheckout(false);
         setTxStatus(null);
+        setTxStep(0);
+        
+        // Show user-friendly error message
+        let errorMessage = 'Payment failed. Please try again.';
+        if (error.message.includes('User denied')) {
+          errorMessage = 'Transaction rejected. You cancelled the transaction.';
+        } else if (error.message.includes('insufficient funds')) {
+          errorMessage = 'Insufficient funds in your wallet.';
+        } else if (error.message.includes('Wallet connection required')) {
+          errorMessage = 'Please connect your MetaMask wallet.';
+        }
+        
         alert(errorMessage);
-      }, 1000);
+      }, 2000);
     }
   };
 
@@ -398,10 +467,9 @@ export default function CustomerProductsPage() {
               
               <button
                 onClick={handleLogout}
-                className="flex items-center space-x-2 px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
               >
                 <LogOut size={20} />
-                <span>Logout</span>
               </button>
             </div>
           </div>
@@ -411,110 +479,53 @@ export default function CustomerProductsPage() {
       {/* Products Grid */}
       <div className="max-w-7xl mx-auto px-4 py-8">
         {loading ? (
-          <div className="flex justify-center items-center h-64">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+          <div className="flex items-center justify-center py-20">
+            <Package className="animate-spin text-blue-600" size={48} />
           </div>
         ) : filteredProducts.length === 0 ? (
-          <div className="text-center py-12">
-            <Package size={48} className="mx-auto text-gray-400 mb-4" />
-            <p className="text-gray-600">No products found</p>
+          <div className="text-center py-20">
+            <Package size={64} className="mx-auto text-gray-400 mb-4" />
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">No products found</h2>
+            <p className="text-gray-600">Try adjusting your search</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-            {filteredProducts.map((product) => {
-              const discountPercentage = product.discount?.percentage || 0;
-              const originalPrice = product.discount?.originalPrice || 0;
-
-              return (
-                <div
-                  key={product._id}
-                  onClick={() => fetchProductDetail(product._id)}
-                  className="bg-white rounded-xl shadow-sm hover:shadow-lg transition-all cursor-pointer border border-gray-200 overflow-hidden group"
-                >
-                  {/* Product Image */}
-                  <div className="relative h-64 bg-gray-100">
-                    <img
-                      src={product.image}
-                      alt={product.name}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                    />
-                    {discountPercentage > 0 && (
-                      <div className="absolute top-3 left-3 bg-green-600 text-white px-3 py-1 rounded-full text-sm font-bold">
-                        {discountPercentage}% OFF
-                      </div>
-                    )}
-                    {product.rating?.average > 0 && (
-                      <div className="absolute top-3 right-3 bg-white px-2 py-1 rounded-lg flex items-center space-x-1 shadow-sm">
-                        <Star size={14} className="fill-yellow-400 text-yellow-400" />
-                        <span className="text-sm font-semibold">{product.rating.average.toFixed(1)}</span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Product Info */}
-                  <div className="p-4">
-                    {/* Brand */}
-                    {product.productDetails?.brand && (
-                      <p className="text-xs text-gray-500 mb-1">{product.productDetails.brand}</p>
-                    )}
-
-                    {/* Product Name */}
-                    <h3 className="font-semibold text-gray-900 mb-2 line-clamp-2 h-12">
-                      {product.name}
-                    </h3>
-
-                    {/* Price */}
-                    <div className="flex items-center space-x-2 mb-3">
-                      <span className="text-2xl font-bold text-gray-900">
-                        ₹{product.price}
-                      </span>
-                      {originalPrice > 0 && (
-                        <>
-                          <span className="text-sm text-gray-500 line-through">
-                            ₹{originalPrice}
-                          </span>
-                          <span className="text-sm text-green-600 font-semibold">
-                            {discountPercentage}% off
-                          </span>
-                        </>
-                      )}
+          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6">
+            {filteredProducts.map((product) => (
+              <div
+                key={product._id}
+                className="bg-white rounded-2xl shadow-sm overflow-hidden hover:shadow-lg transition-shadow cursor-pointer"
+                onClick={() => fetchProductDetail(product._id)}
+              >
+                <div className="aspect-square bg-gray-100 overflow-hidden">
+                  <img
+                    src={product.image}
+                    alt={product.name}
+                    className="w-full h-full object-cover hover:scale-105 transition-transform"
+                  />
+                </div>
+                <div className="p-4">
+                  <h3 className="font-bold text-gray-900 mb-2 line-clamp-2">{product.name}</h3>
+                  <p className="text-sm text-gray-600 mb-3 line-clamp-2">{product.description}</p>
+                  <div className="flex items-center justify-between">
+                    <span className="text-2xl font-bold text-blue-600">₹{product.price}</span>
+                    <div className="text-sm text-gray-600">
+                      <Package size={14} className="inline mr-1" />
+                      {product.quantity} available
                     </div>
-
-                    {/* Quantity Info */}
-                    {product.productDetails?.unit && (
-                      <p className="text-sm text-gray-600 mb-3">
-                        {product.productDetails.packOf > 1 
-                          ? `Pack of ${product.productDetails.packOf}` 
-                          : `Per ${product.productDetails.unit}`}
-                      </p>
-                    )}
-
-                    {/* Add to Cart Button */}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        fetchProductDetail(product._id);
-                      }}
-                      className="w-full py-2.5 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition-colors flex items-center justify-center space-x-2"
-                    >
-                      <ShoppingCart size={18} />
-                      <span>Add Item</span>
-                    </button>
                   </div>
                 </div>
-              );
-            })}
+              </div>
+            ))}
           </div>
         )}
       </div>
 
       {/* Product Detail Modal */}
       {showDetailModal && selectedProduct && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4 overflow-y-auto">
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-            {/* Modal Header */}
             <div className="sticky top-0 bg-white border-b p-4 flex items-center justify-between z-10">
-              <h2 className="text-xl font-bold text-gray-900">Product Details</h2>
+              <h2 className="text-2xl font-bold text-gray-900">Product Details</h2>
               <button
                 onClick={() => setShowDetailModal(false)}
                 className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
@@ -525,124 +536,85 @@ export default function CustomerProductsPage() {
 
             <div className="p-6">
               <div className="grid md:grid-cols-2 gap-8">
-                {/* Left: Image and Description */}
+                {/* Product Images */}
                 <div>
-                  {/* Main Image */}
-                  <div className="bg-gray-100 rounded-xl overflow-hidden mb-4">
+                  <div className="aspect-square bg-gray-100 rounded-2xl overflow-hidden mb-4">
                     <img
                       src={selectedProduct.image}
                       alt={selectedProduct.name}
-                      className="w-full h-96 object-cover"
+                      className="w-full h-full object-cover"
                     />
                   </div>
-
-                  {/* Gallery Images */}
                   {selectedProduct.galleryImages && selectedProduct.galleryImages.length > 0 && (
-                    <div className="grid grid-cols-4 gap-2 mb-4">
-                      {selectedProduct.galleryImages.map((img, index) => (
-                        <div key={index} className="bg-gray-100 rounded-lg overflow-hidden">
-                          <img
-                            src={img}
-                            alt={`Gallery ${index + 1}`}
-                            className="w-full h-24 object-cover cursor-pointer hover:opacity-75"
-                          />
+                    <div className="grid grid-cols-4 gap-2">
+                      {selectedProduct.galleryImages.map((img, idx) => (
+                        <div key={idx} className="aspect-square bg-gray-100 rounded-lg overflow-hidden">
+                          <img src={img} alt={`Gallery ${idx + 1}`} className="w-full h-full object-cover" />
                         </div>
                       ))}
                     </div>
                   )}
-
-                  {/* Description */}
-                  <div className="bg-gray-50 rounded-xl p-4">
-                    <h3 className="font-bold text-gray-900 mb-2">Description</h3>
-                    <p className="text-gray-700 text-sm whitespace-pre-wrap">
-                      {selectedProduct.description || 'No description available'}
-                    </p>
-                  </div>
                 </div>
 
-                {/* Right: Product Info */}
+                {/* Product Info */}
                 <div>
-                  {/* Product Name */}
-                  <h1 className="text-3xl font-bold text-gray-900 mb-4">
-                    {selectedProduct.name}
-                  </h1>
+                  <h3 className="text-3xl font-bold text-gray-900 mb-4">{selectedProduct.name}</h3>
+                  <p className="text-gray-600 mb-6">{selectedProduct.description}</p>
 
-                  {/* Price */}
-                  <div className="bg-blue-50 rounded-xl p-4 mb-6">
-                    <div className="flex items-baseline space-x-3 mb-2">
-                      <span className="text-4xl font-bold text-gray-900">
-                        ₹{selectedProduct.price}
-                      </span>
-                      {selectedProduct.discount?.originalPrice > 0 && (
-                        <>
-                          <span className="text-xl text-gray-500 line-through">
-                            ₹{selectedProduct.discount.originalPrice}
-                          </span>
-                          <span className="text-xl text-green-600 font-bold">
-                            {selectedProduct.discount.percentage}% OFF
-                          </span>
-                        </>
-                      )}
+                  <div className="mb-6">
+                    <div className="flex items-baseline space-x-3 mb-4">
+                      <span className="text-4xl font-bold text-blue-600">₹{selectedProduct.price}</span>
+                      <span className="text-gray-600">per unit</span>
+                    </div>
+                    <div className="text-sm text-gray-600">
+                      <Package size={16} className="inline mr-2" />
+                      {selectedProduct.quantity} units available
                     </div>
                   </div>
 
-                  {/* Quantity Selection */}
+                  {/* Quantity Selector */}
                   <div className="mb-6">
-                    <p className="font-semibold text-gray-900 mb-3">Selected Quantity:</p>
-                    <div className="flex items-center space-x-3">
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">Quantity</label>
+                    <div className="flex items-center space-x-4">
                       <button
                         onClick={() => setPurchaseQuantity(Math.max(1, purchaseQuantity - 1))}
-                        className="p-2 border rounded-lg hover:bg-gray-100"
+                        className="w-10 h-10 border rounded-lg hover:bg-gray-100 flex items-center justify-center"
                       >
-                        <Minus size={18} />
+                        <Minus size={20} />
                       </button>
-                      <span className="text-xl font-bold px-4">{purchaseQuantity}</span>
+                      <span className="text-2xl font-bold w-16 text-center">{purchaseQuantity}</span>
                       <button
                         onClick={() => setPurchaseQuantity(Math.min(selectedProduct.quantity, purchaseQuantity + 1))}
-                        className="p-2 border rounded-lg hover:bg-gray-100"
+                        className="w-10 h-10 border rounded-lg hover:bg-gray-100 flex items-center justify-center"
                       >
-                        <Plus size={18} />
+                        <Plus size={20} />
                       </button>
-                      <span className="text-sm text-gray-600">
-                        {selectedProduct.productDetails?.unit || 'units'}
-                      </span>
                     </div>
+                    <p className="text-sm text-gray-600 mt-2">
+                      Total: ₹{(selectedProduct.price * purchaseQuantity).toFixed(2)}
+                    </p>
                   </div>
 
-                  {/* Product Highlights */}
-                  <div className="bg-gray-50 rounded-xl p-4 mb-6">
-                    <h3 className="font-bold text-gray-900 mb-3">Product highlights</h3>
-                    <div className="grid grid-cols-2 gap-4 text-sm">
+                  {/* Product Details */}
+                  <div className="space-y-3 mb-6">
+                    <h4 className="font-semibold text-gray-900">Product Information</h4>
+                    <div className="grid grid-cols-2 gap-3 text-sm">
                       {selectedProduct.productDetails?.brand && (
                         <div>
                           <p className="text-gray-600">Brand</p>
                           <p className="font-semibold">{selectedProduct.productDetails.brand}</p>
                         </div>
                       )}
-                      {selectedProduct.productDetails?.type && (
+                      {selectedProduct.productDetails?.category && (
                         <div>
-                          <p className="text-gray-600">Type</p>
-                          <p className="font-semibold">{selectedProduct.productDetails.type}</p>
+                          <p className="text-gray-600">Category</p>
+                          <p className="font-semibold">{selectedProduct.productDetails.category}</p>
                         </div>
                       )}
-                      {selectedProduct.productDetails?.maxShelfLife && (
+                      {selectedProduct.productDetails?.weight && (
                         <div>
-                          <p className="text-gray-600">Maximum Shelf Life</p>
-                          <p className="font-semibold">{selectedProduct.productDetails.maxShelfLife}</p>
-                        </div>
-                      )}
-                      {selectedProduct.productDetails?.packOf && (
-                        <div>
-                          <p className="text-gray-600">Pack of</p>
-                          <p className="font-semibold">{selectedProduct.productDetails.packOf}</p>
-                        </div>
-                      )}
-                      {selectedProduct.productDetails?.isPerishable !== undefined && (
-                        <div>
-                          <p className="text-gray-600">Is Perishable</p>
-                          <p className="font-semibold">
-                            {selectedProduct.productDetails.isPerishable ? 'Yes' : 'No'}
-                          </p>
+                          <p className="text-gray-600">Weight</p>
+                          <p className="font-semibold">{selectedProduct.productDetails.weight}</p>
                         </div>
                       )}
                       {selectedProduct.productDetails?.isOrganic !== undefined && (
@@ -768,6 +740,137 @@ export default function CustomerProductsPage() {
         </div>
       )}
 
+      {/* Delivery Address Modal */}
+      {showAddressModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-8 max-h-[90vh] overflow-y-auto">
+            <h2 className="text-2xl font-bold text-gray-900 mb-6">Delivery Address</h2>
+            
+            <div className="space-y-4">
+              <div className="grid md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Full Name *
+                  </label>
+                  <div className="relative">
+                    <User className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
+                    <input
+                      type="text"
+                      value={deliveryAddress.name}
+                      onChange={(e) => setDeliveryAddress({...deliveryAddress, name: e.target.value})}
+                      placeholder="John Doe"
+                      className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Phone Number *
+                  </label>
+                  <div className="relative">
+                    <Phone className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
+                    <input
+                      type="tel"
+                      value={deliveryAddress.phone}
+                      onChange={(e) => setDeliveryAddress({...deliveryAddress, phone: e.target.value})}
+                      placeholder="+91 9876543210"
+                      className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Street Address *
+                </label>
+                <div className="relative">
+                  <MapPin className="absolute left-3 top-3 text-gray-400" size={18} />
+                  <input
+                    type="text"
+                    value={deliveryAddress.street}
+                    onChange={(e) => setDeliveryAddress({...deliveryAddress, street: e.target.value})}
+                    placeholder="123 Main Street, Apartment 4B"
+                    className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    City *
+                  </label>
+                  <input
+                    type="text"
+                    value={deliveryAddress.city}
+                    onChange={(e) => setDeliveryAddress({...deliveryAddress, city: e.target.value})}
+                    placeholder="Mumbai"
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    State *
+                  </label>
+                  <input
+                    type="text"
+                    value={deliveryAddress.state}
+                    onChange={(e) => setDeliveryAddress({...deliveryAddress, state: e.target.value})}
+                    placeholder="Maharashtra"
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    PIN Code *
+                  </label>
+                  <input
+                    type="text"
+                    value={deliveryAddress.pincode}
+                    onChange={(e) => setDeliveryAddress({...deliveryAddress, pincode: e.target.value})}
+                    placeholder="400001"
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-8 bg-gray-50 p-4 rounded-lg">
+              <div className="flex justify-between text-sm text-gray-600 mb-2">
+                <span>Items ({getTotalItems()})</span>
+                <span>₹{getTotalPrice()}</span>
+              </div>
+              <div className="flex justify-between text-lg font-bold text-gray-900 pt-2 border-t">
+                <span>Total Amount</span>
+                <span>₹{getTotalPrice()}</span>
+              </div>
+            </div>
+
+            <div className="flex space-x-3 mt-6">
+              <button
+                onClick={() => {
+                  setShowAddressModal(false);
+                  setShowCart(true);
+                }}
+                className="flex-1 px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition"
+              >
+                Back to Cart
+              </button>
+              <button
+                onClick={proceedToPayment}
+                className="flex-1 px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition"
+              >
+                Proceed to Payment
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Checkout Modal (Transaction Progress) */}
       {showCheckout && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
@@ -831,10 +934,10 @@ export default function CustomerProductsPage() {
                   <CheckCircle2 size={32} className="text-green-600" />
                 </div>
                 <p className="text-xl font-bold text-green-600 mb-2">
-                  Purchase Successful!
+                  Order Placed Successfully!
                 </p>
                 <p className="text-gray-600">
-                  Your transaction has been completed
+                  Redirecting to orders page...
                 </p>
               </div>
             )}
@@ -842,13 +945,14 @@ export default function CustomerProductsPage() {
             {txStatus === 'error' && (
               <div className="text-center">
                 <p className="text-xl font-bold text-red-600 mb-2">
-                  Transaction Failed
+                  Payment Failed
                 </p>
                 <p className="text-gray-600">Please try again</p>
                 <button
                   onClick={() => {
                     setShowCheckout(false);
                     setTxStatus(null);
+                    setShowCart(true);
                   }}
                   className="mt-4 px-6 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
                 >

@@ -1,6 +1,5 @@
-
 import React, { useState } from 'react';
-import { Package, Eye, EyeOff, Mail, Lock, User, Building, ArrowRight } from 'lucide-react';
+import { Package, Eye, EyeOff, Mail, Lock, User, Building, ArrowRight, Truck } from 'lucide-react';
 
 export default function LoginPage() {
   const [isLogin, setIsLogin] = useState(true);
@@ -36,12 +35,13 @@ export default function LoginPage() {
       localStorage.setItem('token', data.token);
       localStorage.setItem('user', JSON.stringify(data.user));
 
-      // Updated redirect map - customers go to /main (main website)
+      // Updated redirect map with delivery partner route
       const redirectMap = {
         admin: '/admin/dashboard',
         suppliers: '/supplier/dashboard',
         manufacturers: '/manufacturer/dashboard',
-        customers: '/main' // CHANGED FROM '/' TO '/main'
+        customers: '/main',
+        delivery_partner: '/delivery/dashboard'
       };
 
       window.location.href = redirectMap[data.user.role] || '/login';
@@ -88,6 +88,12 @@ export default function LoginPage() {
                 <span className="text-blue-600 font-bold">✓</span>
               </div>
               <span className="text-gray-700">Real-time product tracking</span>
+            </div>
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
+                <span className="text-blue-600 font-bold">✓</span>
+              </div>
+              <span className="text-gray-700">Delivery partner integration</span>
             </div>
           </div>
         </div>
@@ -143,6 +149,7 @@ export default function LoginPage() {
                     <option value="suppliers">🚚 Suppliers</option>
                     <option value="manufacturers">🏭 Manufacturers</option>
                     <option value="customers">👤 Customers</option>
+                    <option value="delivery_partner">📦 Delivery Partner</option>
                   </select>
                 </div>
               </>

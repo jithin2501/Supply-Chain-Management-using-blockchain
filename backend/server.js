@@ -68,7 +68,7 @@ const userSchema = new mongoose.Schema({
 
   role: {
     type: String,
-    enum: ['admin', 'suppliers', 'manufacturers', 'customers'],
+    enum: ['admin', 'suppliers', 'manufacturers', 'customers', 'delivery_partner'],
     default: 'suppliers'
   },
 
@@ -99,18 +99,16 @@ const productSchema = new mongoose.Schema({
   name: { type: String, required: true },
   description: { type: String, default: '' },
   quantity: { type: Number, required: true },
-  unit: { type: String, default: 'pieces' }, // Unit of measurement
-  price: { type: Number, required: true }, // Price in INR
+  unit: { type: String, default: 'pieces' },
+  price: { type: Number, required: true },
   image: { type: String, required: true },
   
-  // Google Map Location
   location: {
     lat: { type: Number, required: true },
     lng: { type: Number, required: true },
     address: { type: String, required: true }
   },
 
-  // supplier reference
   supplierId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -141,10 +139,9 @@ const purchasedMaterialSchema = new mongoose.Schema({
   },
   supplierName: { type: String, required: true },
   quantity: { type: Number, required: true },
-  price: { type: Number, required: true }, // Price per unit in INR
+  price: { type: Number, required: true },
   image: { type: String, required: true },
   
-  // Location from original product
   location: {
     lat: { type: Number, required: true },
     lng: { type: Number, required: true },
@@ -170,7 +167,7 @@ const transactionSchema = new mongoose.Schema({
   sellerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   sellerName: { type: String, required: true },
   quantity: { type: Number, required: true },
-  amount: { type: Number, required: true }, // Amount in INR
+  amount: { type: Number, required: true },
   txHash: { type: String, required: true, unique: true },
   status: { 
     type: String, 
@@ -185,136 +182,171 @@ const Transaction = mongoose.model('Transaction', transactionSchema);
 const manufacturedProductSchema = new mongoose.Schema({
   name: { type: String, required: true },
   description: { type: String, required: true },
-  price: { type: Number, required: true }, // Price in INR
+  price: { type: Number, required: true },
   quantity: { type: Number, required: true },
   image: { type: String, required: true },
   
-  // Additional product images for gallery
   galleryImages: {
     type: [String],
     default: []
   },
   
-  // Detailed product information
   productDetails: {
     brand: { type: String, default: '' },
-    type: { type: String, default: '' },
-    maxShelfLife: { type: String, default: '' },
-    isPerishable: { type: Boolean, default: false },
+    category: { type: String, default: '' },
+    weight: { type: String, default: '' },
+    dimensions: { type: String, default: '' },
+    color: { type: String, default: '' },
+    material: { type: String, default: '' },
+    warranty: { type: String, default: '' },
+    certifications: { type: [String], default: [] },
     isOrganic: { type: Boolean, default: false },
-    usedFor: { type: String, default: '' },
-    packOf: { type: Number, default: 1 },
-    unit: { type: String, default: 'kg' }, // kg, pieces, liters, etc.
-    specifications: { type: String, default: '' },
-    manufacture: { type: String, default: '' }
+    expiryDate: { type: Date, default: null }
   },
-  
-  // Control visibility on customer page
-  isVisibleToCustomers: {
-    type: Boolean,
-    default: true
-  },
-  
-  // Discount information
-  discount: {
-    percentage: { type: Number, default: 0 },
-    originalPrice: { type: Number, default: 0 }
-  },
-  
-  // Product ratings
-  rating: {
-    average: { type: Number, default: 0 },
-    count: { type: Number, default: 0 }
-  },
-  
-  // Location from original material
-  location: {
-    lat: { type: Number, required: true },
-    lng: { type: Number, required: true },
-    address: { type: String, required: true }
-  },
-  
-  materialId: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'PurchasedMaterial',
-    required: false // Made optional for combined products
-  },
-  manufacturerId: { 
-    type: mongoose.Schema.Types.ObjectId, 
+
+  manufacturerId: {
+    type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true 
+    required: true
   },
   manufacturerName: { type: String, required: true },
   company: { type: String, required: true },
   
-  // Array to store names of materials used in combination
-  usedMaterials: { 
-    type: [String], 
-    default: [] 
+  rawMaterials: [{
+    materialId: { type: mongoose.Schema.Types.ObjectId, ref: 'PurchasedMaterial' },
+    materialName: { type: String },
+    quantity: { type: Number }
+  }],
+  
+  blockchainData: {
+    contractAddress: { type: String, default: '' },
+    tokenId: { type: String, default: '' },
+    txHash: { type: String, default: '' }
   },
-  // Array to store IDs of materials used in combination
-  usedMaterialIds: {
-    type: [mongoose.Schema.Types.ObjectId],
-    ref: 'PurchasedMaterial',
-    default: []
+
+  status: {
+    type: String,
+    enum: ['available', 'sold'],
+    default: 'available'
   },
-  status: { 
-    type: String, 
-    enum: ['active', 'sold_out', 'discontinued'], 
-    default: 'active' 
-  },
-  createdAt: { type: Date, default: Date.now }
+  
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
 });
 
 const ManufacturedProduct = mongoose.model('ManufacturedProduct', manufacturedProductSchema);
 
-/* ===================== AUTH MIDDLEWARE ===================== */
+// NEW: Order Schema for complete order management
+const orderSchema = new mongoose.Schema({
+  orderNumber: { type: String, required: true, unique: true },
+  customer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  items: [{
+    product: { type: mongoose.Schema.Types.ObjectId, ref: 'ManufacturedProduct', required: true },
+    quantity: { type: Number, required: true, min: 1 },
+    price: { type: Number, required: true }
+  }],
+  totalAmount: { type: Number, required: true },
+  status: {
+    type: String,
+    enum: ['pending', 'confirmed', 'processing', 'out_for_delivery', 'near_location', 'delivered', 'cancelled', 'returned'],
+    default: 'pending'
+  },
+  deliveryAddress: {
+    name: { type: String, required: true },
+    phone: { type: String, required: true },
+    street: { type: String, required: true },
+    city: { type: String, required: true },
+    state: { type: String, required: true },
+    pincode: { type: String, required: true }
+  },
+  deliveryOTP: { type: String, required: true },
+  deliveryPartner: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  assignedAt: { type: Date, default: null },
+  deliveredAt: { type: Date, default: null },
+  trackingHistory: [{
+    status: { type: String, required: true },
+    message: { type: String, required: true },
+    timestamp: { type: Date, default: Date.now },
+    deliveryPartner: {
+      name: String,
+      phone: String
+    }
+  }],
+  feedback: {
+    rating: { type: Number, min: 1, max: 5 },
+    comment: { type: String },
+    submitted: { type: Boolean, default: false },
+    submittedAt: { type: Date }
+  },
+  returnRequest: {
+    requested: { type: Boolean, default: false },
+    reason: { type: String },
+    requestedAt: { type: Date },
+    status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' }
+  },
+  paymentDetails: {
+    transactionHash: { type: String },
+    walletAddress: { type: String },
+    paymentMethod: { type: String, default: 'metamask' }
+  },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
 
-const authenticateToken = (req, res, next) => {
+// Generate random 4-digit OTP and order number
+orderSchema.pre('save', function(next) {
+  if (this.isNew && !this.deliveryOTP) {
+    this.deliveryOTP = Math.floor(1000 + Math.random() * 9000).toString();
+  }
+  
+  if (this.isNew && !this.orderNumber) {
+    this.orderNumber = 'ORD' + Date.now() + Math.floor(Math.random() * 1000);
+  }
+  
+  this.updatedAt = new Date();
+  next();
+});
+
+const Order = mongoose.model('Order', orderSchema);
+
+/* ===================== AUTHENTICATION MIDDLEWARE ===================== */
+
+function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
-    console.log('❌ No token provided');
-    return res.status(401).json({ message: 'Access token required' });
+    return res.status(401).json({ message: 'No token provided' });
   }
 
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) {
-      console.log('❌ Invalid token:', err.message);
       return res.status(403).json({ message: 'Invalid or expired token' });
     }
     req.user = user;
-    console.log('✅ User authenticated:', user.email);
     next();
   });
-};
+}
 
-const authorizeRole = (...roles) => (req, res, next) => {
-  if (!roles.includes(req.user.role)) {
-    console.log(`❌ Access denied for role: ${req.user.role}`);
-    return res
-      .status(403)
-      .json({ message: 'Access denied. Insufficient permissions.' });
-  }
-  next();
-};
-
-/* ===================== API ROUTES ===================== */
 const apiRouter = express.Router();
 
-/* --- Auth Routes --- */
+/* ===================== AUTH ROUTES ===================== */
+
 apiRouter.post('/auth/register', async (req, res) => {
   try {
     const { name, email, password, company, role } = req.body;
-    console.log('📝 Registration attempt:', { name, email, company, role });
 
     if (!name || !email || !password || !company) {
-      return res.status(400).json({ message: 'All fields are required' });
+      return res.status(400).json({ 
+        message: 'All fields are required' 
+      });
     }
 
-    if (await User.findOne({ email })) {
-      return res.status(400).json({ message: 'User already exists' });
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(409).json({ 
+        message: 'User already exists with this email' 
+      });
     }
 
     const user = new User({
@@ -326,1482 +358,148 @@ apiRouter.post('/auth/register', async (req, res) => {
     });
 
     await user.save();
-    console.log('✅ User registered successfully:', email);
 
     const token = jwt.sign(
-      { id: user._id, email: user.email, role: user.role },
+      { 
+        userId: user._id, 
+        email: user.email, 
+        role: user.role 
+      },
       JWT_SECRET,
       { expiresIn: '7d' }
     );
 
-    res.status(201).json({ token, user });
+    console.log(`✅ New user registered: ${email} (${role})`);
+
+    res.status(201).json({
+      message: 'Registration successful',
+      token,
+      user: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        company: user.company
+      }
+    });
+
   } catch (err) {
     console.error('❌ Registration error:', err);
-    res.status(500).json({ message: 'Server error during registration' });
+    res.status(500).json({ 
+      message: 'Server error during registration',
+      error: err.message 
+    });
   }
 });
 
 apiRouter.post('/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    console.log('🔐 Login attempt:', email);
+
+    if (!email || !password) {
+      return res.status(400).json({ 
+        message: 'Email and password are required' 
+      });
+    }
 
     const user = await User.findOne({ email });
-    if (!user || !(await user.comparePassword(password))) {
-      console.log('❌ Invalid credentials for:', email);
-      return res.status(401).json({ message: 'Invalid email or password' });
+    if (!user) {
+      return res.status(401).json({ 
+        message: 'Invalid credentials' 
+      });
+    }
+
+    const isPasswordValid = await user.comparePassword(password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ 
+        message: 'Invalid credentials' 
+      });
     }
 
     user.lastLogin = new Date();
     await user.save();
 
     const token = jwt.sign(
-      { id: user._id, email: user.email, role: user.role },
+      { 
+        userId: user._id, 
+        email: user.email, 
+        role: user.role 
+      },
       JWT_SECRET,
       { expiresIn: '7d' }
     );
 
-    console.log('✅ User logged in successfully:', email);
-    res.json({ token, user });
+    console.log(`✅ User logged in: ${email} (${user.role})`);
+
+    res.json({
+      message: 'Login successful',
+      token,
+      user: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        company: user.company
+      }
+    });
+
   } catch (err) {
     console.error('❌ Login error:', err);
-    res.status(500).json({ message: 'Server error during login' });
+    res.status(500).json({ 
+      message: 'Server error during login',
+      error: err.message 
+    });
   }
 });
 
-/* --- Product Routes --- */
+/* ===================== SUPPLIER ROUTES ===================== */
 
-// SUPPLIER: Add product with location
-apiRouter.post(
-  '/products',
-  authenticateToken,
-  authorizeRole('suppliers'),
-  upload.single('image'),
-  async (req, res) => {
-    try {
-      const { name, quantity, price, unit, description, lat, lng, address } = req.body;
-      const user = await User.findById(req.user.id);
-
-      console.log('📦 Adding product:', { name, quantity, unit, price, supplierId: user._id });
-
-      if (!req.file) {
-        console.log('❌ No image uploaded');
-        return res.status(400).json({ message: 'Image is required' });
-      }
-
-      // Validate location data
-      if (!lat || !lng || !address) {
-        return res.status(400).json({ message: 'Location information is required' });
-      }
-
-      console.log('📸 Image uploaded to Cloudinary:', req.file.path);
-
-      const product = new Product({
-        name,
-        description: description || '',
-        quantity: parseInt(quantity),
-        unit: unit || 'pieces',
-        price: parseFloat(price), // Store in INR
-        image: req.file.path,
-        location: {
-          lat: parseFloat(lat),
-          lng: parseFloat(lng),
-          address: address
-        },
-        supplierId: user._id,
-        supplierName: user.name,
-        company: user.company
-      });
-
-      await product.save();
-      console.log('✅ Product saved to database:', product._id);
-      res.status(201).json(product);
-    } catch (err) {
-      console.error('❌ Error adding product:', err);
-      res.status(500).json({ message: 'Error adding product', error: err.message });
-    }
-  }
-);
-
-// SUPPLIER: Get ONLY my materials
-apiRouter.get(
-  '/products/mine',
-  authenticateToken,
-  authorizeRole('suppliers'),
-  async (req, res) => {
-    try {
-      console.log('📋 Fetching products for supplier ID:', req.user.id);
-
-      const products = await Product.find({
-        supplierId: req.user.id
-      }).sort({ createdAt: -1 });
-
-      console.log(`✅ Found ${products.length} products for user ${req.user.email}`);
-      res.json(products);
-    } catch (err) {
-      console.error('❌ Error fetching inventory:', err);
-      res.status(500).json({ message: 'Error fetching your inventory', error: err.message });
-    }
-  }
-);
-
-// SUPPLIER: Update material
-apiRouter.put(
-  '/products/:id',
-  authenticateToken,
-  authorizeRole('suppliers'),
-  upload.single('image'),
-  async (req, res) => {
-    try {
-      const { name, quantity, price, unit, description, lat, lng, address } = req.body;
-      const updateData = { 
-        name, 
-        quantity: parseInt(quantity), 
-        unit: unit || 'pieces',
-        price: parseFloat(price),
-        description: description || ''
-      };
-
-      console.log('✏️ Updating product:', req.params.id);
-
-      // Add location if provided
-      if (lat && lng && address) {
-        updateData.location = {
-          lat: parseFloat(lat),
-          lng: parseFloat(lng),
-          address: address
-        };
-      }
-
-      if (req.file) {
-        updateData.image = req.file.path;
-        console.log('📸 Updated image:', req.file.path);
-      }
-
-      const product = await Product.findOneAndUpdate(
-        { _id: req.params.id, supplierId: req.user.id },
-        updateData,
-        { new: true }
-      );
-
-      if (!product) {
-        return res.status(404).json({ message: 'Material not found or unauthorized' });
-      }
-
-      console.log('✅ Product updated successfully:', product._id);
-      res.json(product);
-    } catch (err) {
-      console.error('❌ Error updating material:', err);
-      res.status(500).json({ message: 'Error updating material', error: err.message });
-    }
-  }
-);
-
-// SUPPLIER: Delete material
-apiRouter.delete(
-  '/products/:id',
-  authenticateToken,
-  authorizeRole('suppliers'),
-  async (req, res) => {
-    try {
-      console.log('🗑️ Deleting product:', req.params.id);
-
-      const product = await Product.findOneAndDelete({
-        _id: req.params.id,
-        supplierId: req.user.id
-      });
-
-      if (!product) {
-        return res.status(404).json({ message: 'Material not found' });
-      }
-
-      console.log('✅ Product deleted successfully');
-      res.json({ message: 'Material deleted successfully' });
-    } catch (err) {
-      console.error('❌ Error deleting material:', err);
-      res.status(500).json({ message: 'Error deleting material' });
-    }
-  }
-);
-
-// MANUFACTURER: Get all available materials (raw materials from suppliers)
-apiRouter.get(
-  '/products/available',
-  authenticateToken,
-  async (req, res) => {
-    try {
-      console.log(`\n🔍 [AVAILABLE PRODUCTS] Request from: ${req.user.role} - ${req.user.email} (ID: ${req.user.id})`);
-      
-      // If user is manufacturer, return raw materials from suppliers
-      if (req.user.role === 'manufacturers') {
-        console.log(`📦 [STEP 1] Fetching ALL products with quantity > 0`);
-        // First, get all products with quantity > 0
-        const allProducts = await Product.find({ 
-          quantity: { $gt: 0 } 
-        }).sort({ createdAt: -1 });
-        
-        console.log(`✅ Found ${allProducts.length} total products with stock > 0`);
-        
-        return res.json(allProducts);
-      }
-      
-      // If user is customer, return manufactured products (only visible ones)
-      if (req.user.role === 'customers') {
-        const products = await ManufacturedProduct.find({
-          status: 'active',
-          quantity: { $gt: 0 },
-          isVisibleToCustomers: true // Only show visible products
-        })
-        .populate('manufacturerId', 'name company walletAddress email')  // ✅ Include walletAddress
-        .sort({ createdAt: -1 });
-        console.log(`✅ Customer ${req.user.email}: ${products.length} available visible products`);
-        
-        return res.json(products);
-      }
-      
-      // For other roles, return empty array
-      res.json([]);
-    } catch (err) {
-      console.error('❌ Error fetching products:', err);
-      res.status(500).json({ message: 'Error fetching products', error: err.message });
-    }
-  }
-);
-
-// Get single product detail (for customers)
-apiRouter.get(
-  '/products/:id/detail',
-  authenticateToken,
-  async (req, res) => {
-    try {
-      const product = await ManufacturedProduct.findById(req.params.id);
-      
-      if (!product) {
-        return res.status(404).json({ message: 'Product not found' });
-      }
-
-      // If customer, only allow visible products
-      if (req.user.role === 'customers' && !product.isVisibleToCustomers) {
-        return res.status(403).json({ message: 'Product not available' });
-      }
-
-      res.json(product);
-    } catch (err) {
-      console.error('❌ Error fetching product detail:', err);
-      res.status(500).json({ 
-        message: 'Error fetching product detail', 
-        error: err.message 
-      });
-    }
-  }
-);
-
-// MANUFACTURER: Purchase product (raw material from supplier) with quantity selection
-apiRouter.post(
-  '/products/buy-raw',
-  authenticateToken,
-  authorizeRole('manufacturers'),
-  async (req, res) => {
-    try {
-      const { productId, quantity, externalTxHash } = req.body;
-      
-      console.log(`\n🛒 [PURCHASE ATTEMPT] Manufacturer: ${req.user.email} (ID: ${req.user.id})`);
-      console.log(`   Product ID: ${productId}`);
-      console.log(`   Quantity: ${quantity}`);
-      console.log(`   TX Hash: ${externalTxHash}`);
-      
-      // Validate required fields
-      if (!productId || !externalTxHash || !quantity) {
-        return res.status(400).json({ 
-          message: 'Product ID, quantity and transaction hash are required' 
-        });
-      }
-
-      const quantityToBuy = parseInt(quantity);
-      if (quantityToBuy <= 0) {
-        return res.status(400).json({ 
-          message: 'Quantity must be greater than 0' 
-        });
-      }
-
-      // Find product
-      const product = await Product.findById(productId);
-      if (!product) {
-        console.log(`❌ Product not found: ${productId}`);
-        return res.status(404).json({ message: 'Product not found' });
-      }
-
-      console.log(`✅ Found product: "${product.name}" (ID: ${product._id})`);
-      console.log(`📊 Available quantity: ${product.quantity}`);
-      
-      // Check stock
-      if (product.quantity < quantityToBuy) {
-        console.log(`❌ Insufficient stock: ${product.quantity} available, ${quantityToBuy} requested`);
-        return res.status(400).json({ 
-          message: `Insufficient stock. Only ${product.quantity} units available` 
-        });
-      }
-
-
-      // Find buyer
-      const buyer = await User.findById(req.user.id);
-      if (!buyer) {
-        console.log(`❌ Buyer not found: ${req.user.id}`);
-        return res.status(404).json({ message: 'Buyer not found' });
-      }
-
-      // Find seller
-      const seller = await User.findById(product.supplierId);
-      if (!seller) {
-        console.log(`❌ Seller not found: ${product.supplierId}`);
-        return res.status(404).json({ message: 'Seller not found' });
-      }
-
-      console.log(`✅ Buyer: ${buyer.email}, Seller: ${seller.email}`);
-      
-      // Update product quantity (reduce by purchased quantity)
-      const originalQuantity = product.quantity;
-      product.quantity -= quantityToBuy;
-      await product.save();
-      console.log(`📊 Updated product quantity: ${originalQuantity} -> ${product.quantity}`);
-
-      // Calculate total amount in INR
-      const totalAmount = product.price * quantityToBuy;
-
-      // Create transaction record
-      const transaction = new Transaction({
-        productId: product._id,
-        productName: product.name,
-        buyerId: buyer._id,
-        buyerName: buyer.name,
-        sellerId: seller._id,
-        sellerName: seller.name,
-        quantity: quantityToBuy,
-        amount: totalAmount,
-        txHash: externalTxHash,
-        status: 'completed'
-      });
-
-      await transaction.save();
-      console.log(`✅ Transaction saved: ${transaction._id}`);
-
-      // Create purchased material record for this manufacturer
-      await PurchasedMaterial.create({
-        productId: product._id,
-        originalProductId: product._id,
-        productName: product.name,
-        manufacturerId: buyer._id,
-        manufacturerName: buyer.name,
-        supplierId: seller._id,
-        supplierName: seller.name,
-        quantity: quantityToBuy,
-        price: product.price, // Price per unit in INR
-        image: product.image,
-        location: product.location, // Copy location from original product
-        txHash: externalTxHash,
-        status: 'available',
-        purchasedAt: new Date()
-      });
-      console.log(`✅ PurchasedMaterial record created`);
-
-
-      console.log('🎉 PURCHASE COMPLETE:', {
-        product: product.name,
-        quantity: quantityToBuy,
-        pricePerUnit: product.price,
-        totalAmount: totalAmount,
-        buyer: buyer.email,
-        seller: seller.email,
-        txHash: externalTxHash,
-        remainingStock: product.quantity
-      });
-
-      // Return success response
-      res.status(200).json({
-        message: 'Purchase successful',
-        transaction: transaction,
-        purchasedQuantity: quantityToBuy,
-        remainingStock: product.quantity,
-        productId: product._id
-      });
-
-    } catch (err) {
-      console.error('❌ Purchase error:', err);
-      res.status(500).json({ 
-        message: 'Error processing purchase', 
-        error: err.message 
-      });
-    }
-  }
-);
-
-/* --- Supplier Routes --- */
-
-// SUPPLIER: Get purchased materials (materials that have been sold to manufacturers)
-apiRouter.get(
-  '/supplier/purchased-materials',
-  authenticateToken,
-  authorizeRole('suppliers'),
-  async (req, res) => {
-    try {
-      console.log(`📦 Fetching purchased materials for supplier: ${req.user.email} (ID: ${req.user.id})`);
-      
-      // Find all purchased materials where this supplier is the original seller
-      const purchasedMaterials = await PurchasedMaterial.find({ 
-        supplierId: req.user.id
-      }).sort({ purchasedAt: -1 });
-      
-      console.log(`✅ Found ${purchasedMaterials.length} purchased materials for supplier ${req.user.email}`);
-      
-      res.json(purchasedMaterials);
-    } catch (err) {
-      console.error('❌ Error fetching purchased materials:', err);
-      res.status(500).json({ 
-        message: 'Error fetching purchased materials', 
-        error: err.message 
-      });
-    }
-  }
-);
-
-// SUPPLIER: Get payment receipts (transactions where supplier sold materials)
-apiRouter.get(
-  '/supplier/receipts',
-  authenticateToken,
-  authorizeRole('suppliers'),
-  async (req, res) => {
-    try {
-      console.log(`🧾 Fetching payment receipts for supplier: ${req.user.email} (ID: ${req.user.id})`);
-      
-      // Find all transactions where this supplier is the seller
-      const receipts = await Transaction.find({ 
-        sellerId: req.user.id,
-        status: 'completed'
-      }).sort({ timestamp: -1 });
-      
-      console.log(`✅ Found ${receipts.length} payment receipts for supplier ${req.user.email}`);
-      
-      res.json(receipts);
-    } catch (err) {
-      console.error('❌ Error fetching payment receipts:', err);
-      res.status(500).json({ 
-        message: 'Error fetching payment receipts', 
-        error: err.message 
-      });
-    }
-  }
-);
-
-// SUPPLIER: Delete a payment receipt
-apiRouter.delete(
-  '/supplier/receipts/:receiptId',
-  authenticateToken,
-  authorizeRole('suppliers'),
-  async (req, res) => {
-    try {
-      const { receiptId } = req.params;
-      
-      console.log(`🗑️ Delete receipt request: ${receiptId} by supplier ${req.user.email} (ID: ${req.user.id})`);
-
-      // Validate ObjectId format
-      if (!mongoose.Types.ObjectId.isValid(receiptId)) {
-        console.log(`❌ Invalid ObjectId format: ${receiptId}`);
-        return res.status(400).json({ 
-          message: 'Invalid receipt ID format' 
-        });
-      }
-
-      // Find the receipt and verify it belongs to this supplier
-      const receipt = await Transaction.findOne({
-        _id: receiptId,
-        sellerId: req.user.id
-      });
-
-      if (!receipt) {
-        return res.status(404).json({ 
-          message: 'Receipt not found or unauthorized' 
-        });
-      }
-
-      // Delete the receipt
-      await Transaction.deleteOne({ _id: receiptId });
-
-      console.log(`✅ Receipt deleted: ${receiptId} by supplier ${req.user.email}`);
-
-      res.json({ 
-        message: 'Receipt deleted successfully',
-        receiptId 
-      });
-
-    } catch (err) {
-      console.error('❌ Error deleting receipt:', err);
-      res.status(500).json({ 
-        message: 'Error deleting receipt', 
-        error: err.message 
-      });
-    }
-  }
-);
-
-/* --- Manufacturer Routes --- */
-
-// MANUFACTURER: Get purchased materials
-apiRouter.get(
-  '/manufacturer/purchased-materials',
-  authenticateToken,
-  authorizeRole('manufacturers'),
-  async (req, res) => {
-    try {
-      const purchasedMaterials = await PurchasedMaterial.find({ 
-        manufacturerId: req.user.id
-      }).sort({ purchasedAt: -1 });
-      
-      console.log(`📦 Purchased materials for ${req.user.email}: ${purchasedMaterials.length} items`);
-      
-      res.json(purchasedMaterials);
-    } catch (err) {
-      console.error('❌ Error fetching purchased materials:', err);
-      res.status(500).json({ message: 'Error fetching purchased materials', error: err.message });
-    }
-  }
-);
-
-// MANUFACTURER: Get bought materials (same as purchased materials, different naming)
-apiRouter.get(
-  '/manufacturer/bought-materials',
-  authenticateToken,
-  authorizeRole('manufacturers'),
-  async (req, res) => {
-    try {
-      const boughtMaterials = await PurchasedMaterial.find({ 
-        manufacturerId: req.user.id
-      }).sort({ purchasedAt: -1 });
-      
-      console.log(`📦 Bought materials for ${req.user.email}: ${boughtMaterials.length} items`);
-      
-      res.json(boughtMaterials);
-    } catch (err) {
-      console.error('❌ Error fetching bought materials:', err);
-      res.status(500).json({ message: 'Error fetching bought materials', error: err.message });
-    }
-  }
-);
-
-// MANUFACTURER: Get purchase history (raw materials bought)
-apiRouter.get(
-  '/manufacturer/purchases',
-  authenticateToken,
-  authorizeRole('manufacturers'),
-  async (req, res) => {
-    try {
-      const purchases = await Transaction.find({ buyerId: req.user.id })
-        .sort({ timestamp: -1 })
-        .populate('productId', 'name image');
-      
-      console.log(`📜 Purchase history for ${req.user.email}: ${purchases.length} transactions`);
-      
-      res.json(purchases);
-    } catch (err) {
-      console.error('❌ Error fetching purchases:', err);
-      res.status(500).json({ message: 'Error fetching purchase history', error: err.message });
-    }
-  }
-);
-
-// MANUFACTURER: Create a new product from purchased material (with image upload) - UPDATED
-apiRouter.post(
-  '/manufacturer/create-product',
-  authenticateToken,
-  authorizeRole('manufacturers'),
-  upload.single('image'),
-  async (req, res) => {
-    try {
-      const { materialId, name, description, price, quantity } = req.body;
-      
-      console.log('🏭 Create product request:', {
-        materialId,
-        name,
-        quantity,
-        price,
-        manufacturer: req.user.email,
-        hasImage: !!req.file
-      });
-
-      if (!materialId || !name || !description || !price || !quantity) {
-        return res.status(400).json({ 
-          message: 'All fields are required' 
-        });
-      }
-
-      if (!req.file) {
-        return res.status(400).json({ message: 'Product image is required' });
-      }
-
-      // Verify the material belongs to this manufacturer
-      const material = await PurchasedMaterial.findOne({
-        _id: materialId,
-        manufacturerId: req.user.id,
-        status: 'available'
-      });
-
-      if (!material) {
-        return res.status(404).json({ 
-          message: 'Material not found, unauthorized, or already used' 
-        });
-      }
-
-      // Get manufacturer details
-      const manufacturer = await User.findById(req.user.id);
-      if (!manufacturer) {
-        return res.status(404).json({ message: 'Manufacturer not found' });
-      }
-
-      // Handle location with better validation
-      let location = material.location;
-      
-      if (!location || 
-          location.lat === undefined || 
-          location.lng === undefined || 
-          !location.address) {
-        console.warn('⚠️ Material has incomplete location, using defaults:', location);
-        location = {
-          lat: 0,
-          lng: 0,
-          address: 'Location not specified'
-        };
-      }
-
-      // Update purchased material status to used
-      material.status = 'used';
-      await material.save();
-
-      // Generate tx hash
-      const txHash = `0x${Date.now().toString(16)}${Math.random().toString(16).substr(2, 8)}`;
-
-      const product = new ManufacturedProduct({
-        name,
-        description,
-        price: parseFloat(price),
-        quantity: parseInt(quantity),
-        image: req.file.path,
-        location: {
-          lat: parseFloat(location.lat),
-          lng: parseFloat(location.lng),
-          address: location.address.toString()
-        },
-        materialId: material._id,
-        manufacturerId: manufacturer._id,
-        manufacturerName: manufacturer.name,
-        company: manufacturer.company,
-        txHash: txHash,
-        status: 'active'
-      });
-
-      await product.save();
-
-      console.log('✅ Product created:', {
-        productId: product._id,
-        name: product.name,
-        manufacturer: manufacturer.email,
-        fromMaterial: material.productName
-      });
-
-      res.status(201).json(product);
-    } catch (err) {
-      console.error('❌ Error creating product:', err);
-      console.error('❌ Error stack:', err.stack);
-      res.status(500).json({ 
-        message: 'Error creating product', 
-        error: err.message,
-        details: process.env.NODE_ENV === 'development' ? err.stack : undefined
-      });
-    }
-  }
-);
-
-// MANUFACTURER: Create a new product from purchased material
-apiRouter.post(
-  '/manufacturer/products',
-  authenticateToken,
-  authorizeRole('manufacturers'),
-  async (req, res) => {
-    try {
-      const { materialId, name, description, price, quantity, externalTxHash } = req.body;
-      
-      if (!materialId || !name || !description || !price || !quantity || !externalTxHash) {
-        return res.status(400).json({ 
-          message: 'All fields including transaction hash are required' 
-        });
-      }
-
-      // Verify the material belongs to this manufacturer
-      const material = await PurchasedMaterial.findOne({
-        _id: materialId,
-        manufacturerId: req.user.id,
-        status: 'available'
-      });
-
-      if (!material) {
-        return res.status(404).json({ 
-          message: 'Material not found or unauthorized' 
-        });
-      }
-
-      // Update purchased material status to used
-      material.status = 'used';
-      await material.save();
-
-      const manufacturer = await User.findById(req.user.id);
-
-      const product = new ManufacturedProduct({
-        name,
-        description,
-        price: parseFloat(price),
-        quantity: parseInt(quantity),
-        image: material.image,
-        location: material.location, // Copy location from purchased material
-        materialId: material._id,
-        manufacturerId: manufacturer._id,
-        manufacturerName: manufacturer.name,
-        company: manufacturer.company,
-        txHash: externalTxHash,
-        status: 'active'
-      });
-
-      await product.save();
-
-      console.log('✅ Product created:', {
-        name,
-        manufacturer: manufacturer.email,
-        txHash: externalTxHash
-      });
-
-      res.status(201).json({
-        message: 'Product created successfully',
-        product: product
-      });
-
-    } catch (err) {
-      console.error('❌ Product creation error:', err);
-      res.status(500).json({ 
-        message: 'Error creating product', 
-        error: err.message 
-      });
-    }
-  }
-);
-
-// Get all products for a manufacturer
-apiRouter.get(
-  '/manufacturer/products',
-  authenticateToken,
-  authorizeRole('manufacturers'),
-  async (req, res) => {
-    try {
-      const products = await ManufacturedProduct.find({
-        manufacturerId: req.user.id
-      }).sort({ createdAt: -1 });
-
-      res.json(products);
-    } catch (err) {
-      console.error('❌ Error fetching products:', err);
-      res.status(500).json({ 
-        message: 'Error fetching products', 
-        error: err.message 
-      });
-    }
-  }
-);
-
-// Update a product
-apiRouter.put(
-  '/manufacturer/products/:id',
-  authenticateToken,
-  authorizeRole('manufacturers'),
-  async (req, res) => {
-    try {
-      const { name, description, price, quantity } = req.body;
-      
-      const product = await ManufacturedProduct.findOneAndUpdate(
-        { 
-          _id: req.params.id,
-          manufacturerId: req.user.id 
-        },
-        { 
-          name, 
-          description, 
-          price: parseFloat(price), 
-          quantity: parseInt(quantity) 
-        },
-        { new: true }
-      );
-
-      if (!product) {
-        return res.status(404).json({ 
-          message: 'Product not found or unauthorized' 
-        });
-      }
-
-      res.json(product);
-    } catch (err) {
-      console.error('❌ Error updating product:', err);
-      res.status(500).json({ 
-        message: 'Error updating product', 
-        error: err.message 
-      });
-    }
-  }
-);
-
-// Delete a product
-apiRouter.delete(
-  '/manufacturer/products/:id',
-  authenticateToken,
-  authorizeRole('manufacturers'),
-  async (req, res) => {
-    try {
-      const product = await ManufacturedProduct.findOneAndDelete({
-        _id: req.params.id,
-        manufacturerId: req.user.id
-      });
-
-      if (!product) {
-        return res.status(404).json({ 
-          message: 'Product not found or unauthorized' 
-        });
-      }
-
-      res.json({ message: 'Product deleted successfully' });
-    } catch (err) {
-      console.error('❌ Error deleting product:', err);
-      res.status(500).json({ 
-        message: 'Error deleting product', 
-        error: err.message 
-      });
-    }
-  }
-);
-
-// Toggle product visibility for customers
-apiRouter.patch(
-  '/manufacturer/products/:id/toggle-visibility',
-  authenticateToken,
-  authorizeRole('manufacturers'),
-  async (req, res) => {
-    try {
-      const product = await ManufacturedProduct.findOne({
-        _id: req.params.id,
-        manufacturerId: req.user.id
-      });
-
-      if (!product) {
-        return res.status(404).json({ 
-          message: 'Product not found or unauthorized' 
-        });
-      }
-
-      product.isVisibleToCustomers = !product.isVisibleToCustomers;
-      await product.save();
-
-      res.json({ 
-        message: `Product ${product.isVisibleToCustomers ? 'shown' : 'hidden'} on customer page`,
-        product 
-      });
-    } catch (err) {
-      console.error('❌ Error toggling visibility:', err);
-      res.status(500).json({ 
-        message: 'Error toggling visibility', 
-        error: err.message 
-      });
-    }
-  }
-);
-
-// Update product details (including gallery, specifications, etc.)
-apiRouter.patch(
-  '/manufacturer/products/:id/details',
-  authenticateToken,
-  authorizeRole('manufacturers'),
-  upload.array('galleryImages', 5), // Allow up to 5 additional images
-  async (req, res) => {
-    try {
-      const product = await ManufacturedProduct.findOne({
-        _id: req.params.id,
-        manufacturerId: req.user.id
-      });
-
-      if (!product) {
-        return res.status(404).json({ 
-          message: 'Product not found or unauthorized' 
-        });
-      }
-
-      // Update basic fields if provided
-      if (req.body.name) product.name = req.body.name;
-      if (req.body.description) product.description = req.body.description;
-      if (req.body.price) product.price = parseFloat(req.body.price);
-      if (req.body.quantity) product.quantity = parseInt(req.body.quantity);
-
-      // Update product details
-      if (req.body.productDetails) {
-        const details = typeof req.body.productDetails === 'string' 
-          ? JSON.parse(req.body.productDetails) 
-          : req.body.productDetails;
-        
-        product.productDetails = {
-          ...product.productDetails,
-          ...details
-        };
-      }
-
-      // Update discount if provided
-      if (req.body.discount) {
-        const discount = typeof req.body.discount === 'string' 
-          ? JSON.parse(req.body.discount) 
-          : req.body.discount;
-        
-        product.discount = discount;
-      }
-
-      // Add gallery images if uploaded
-      if (req.files && req.files.length > 0) {
-        const newImages = req.files.map(file => file.path);
-        product.galleryImages = [...product.galleryImages, ...newImages];
-      }
-
-      await product.save();
-
-      res.json({ 
-        message: 'Product details updated successfully',
-        product 
-      });
-    } catch (err) {
-      console.error('❌ Error updating product details:', err);
-      res.status(500).json({ 
-        message: 'Error updating product details', 
-        error: err.message 
-      });
-    }
-  }
-);
-
-// Remove gallery image
-apiRouter.delete(
-  '/manufacturer/products/:id/gallery/:imageIndex',
-  authenticateToken,
-  authorizeRole('manufacturers'),
-  async (req, res) => {
-    try {
-      const product = await ManufacturedProduct.findOne({
-        _id: req.params.id,
-        manufacturerId: req.user.id
-      });
-
-      if (!product) {
-        return res.status(404).json({ 
-          message: 'Product not found or unauthorized' 
-        });
-      }
-
-      const imageIndex = parseInt(req.params.imageIndex);
-      if (imageIndex < 0 || imageIndex >= product.galleryImages.length) {
-        return res.status(400).json({ message: 'Invalid image index' });
-      }
-
-      product.galleryImages.splice(imageIndex, 1);
-      await product.save();
-
-      res.json({ 
-        message: 'Gallery image removed successfully',
-        product 
-      });
-    } catch (err) {
-      console.error('❌ Error removing gallery image:', err);
-      res.status(500).json({ 
-        message: 'Error removing gallery image', 
-        error: err.message 
-      });
-    }
-  }
-);
-
-// CUSTOMER: Purchase manufactured product
-apiRouter.post(
-  '/products/buy-final',
-  authenticateToken,
-  authorizeRole('customers'),
-  async (req, res) => {
-    try {
-      const { productId, quantity, externalTxHash } = req.body;
-      
-      if (!productId || !externalTxHash || !quantity) {
-        return res.status(400).json({ 
-          message: 'Product ID, quantity and transaction hash are required' 
-        });
-      }
-
-      const quantityToBuy = parseInt(quantity);
-
-      // Find product (manufactured product)
-      const product = await ManufacturedProduct.findById(productId);
-      if (!product) {
-        return res.status(404).json({ message: 'Product not found' });
-      }
-
-      // Check stock
-      if (product.quantity < quantityToBuy) {
-        return res.status(400).json({ 
-          message: `Insufficient stock. Only ${product.quantity} units available` 
-        });
-      }
-
-      // Find buyer (customer)
-      const buyer = await User.findById(req.user.id);
-      if (!buyer) {
-        return res.status(404).json({ message: 'Buyer not found' });
-      }
-
-      // Find seller (manufacturer)
-      const seller = await User.findById(product.manufacturerId);
-      if (!seller) {
-        return res.status(404).json({ message: 'Manufacturer not found' });
-      }
-
-      // Update product quantity
-      product.quantity -= quantityToBuy;
-      if (product.quantity === 0) {
-        product.status = 'sold_out';
-      }
-      await product.save();
-
-      // Calculate total amount in INR
-      const totalAmount = product.price * quantityToBuy;
-
-      // Create customer transaction record
-      const customerTransaction = new Transaction({
-        productId: product._id,
-        productName: product.name,
-        buyerId: buyer._id,
-        buyerName: buyer.name,
-        sellerId: seller._id,
-        sellerName: seller.name,
-        quantity: quantityToBuy,
-        amount: totalAmount,
-        txHash: externalTxHash,
-        status: 'completed'
-      });
-
-      await customerTransaction.save();
-
-      console.log('✅ Customer purchase recorded:', {
-        product: product.name,
-        quantity: quantityToBuy,
-        totalAmount: totalAmount,
-        buyer: buyer.email,
-        seller: seller.email,
-        txHash: externalTxHash
-      });
-
-      res.status(200).json({
-        message: 'Purchase successful',
-        transaction: customerTransaction,
-        purchasedQuantity: quantityToBuy,
-        remainingStock: product.quantity
-      });
-
-    } catch (err) {
-      console.error('❌ Purchase error:', err);
-      res.status(500).json({ 
-        message: 'Error processing purchase', 
-        error: err.message 
-      });
-    }
-  }
-);
-
-// CUSTOMER: Get purchase history
-apiRouter.get(
-  '/customer/purchases',
-  authenticateToken,
-  authorizeRole('customers'),
-  async (req, res) => {
-    try {
-      console.log(`📋 Fetching purchases for customer: ${req.user.email} (ID: ${req.user.id})`);
-      
-      const purchases = await Transaction.find({ buyerId: req.user.id })
-        .sort({ timestamp: -1 });
-      
-      console.log(`✅ Found ${purchases.length} purchases for customer ${req.user.email}`);
-      
-      res.json(purchases);
-    } catch (err) {
-      console.error('❌ Error fetching customer purchases:', err);
-      res.status(500).json({ 
-        message: 'Error fetching purchase history', 
-        error: err.message 
-      });
-    }
-  }
-); 
-
-// DELETE a purchase from customer history
-apiRouter.delete(
-  '/customer/purchases/:purchaseId',
-  authenticateToken,
-  authorizeRole('customers'),
-  async (req, res) => {
-    try {
-      const { purchaseId } = req.params;
-      
-      console.log(`🗑️ Delete request for purchase: ${purchaseId} by user ${req.user.email} (ID: ${req.user.id})`);
-
-      // Validate ObjectId format
-      if (!mongoose.Types.ObjectId.isValid(purchaseId)) {
-        console.log(`❌ Invalid ObjectId format: ${purchaseId}`);
-        return res.status(400).json({ 
-          message: 'Invalid purchase ID format' 
-        });
-      }
-
-      // Find the purchase and verify it belongs to this customer
-      const purchase = await Transaction.findOne({
-        _id: purchaseId,
-        buyerId: req.user.id
-      });
-
-      if (!purchase) {
-        return res.status(404).json({ 
-          message: 'Purchase not found or unauthorized' 
-        });
-      }
-
-      // Delete the purchase
-      await Transaction.deleteOne({ _id: purchaseId });
-
-      console.log(`✅ Purchase deleted: ${purchaseId} by customer ${req.user.email}`);
-
-      res.json({ 
-        message: 'Purchase deleted successfully',
-        purchaseId 
-      });
-
-    } catch (err) {
-      console.error('❌ Error deleting purchase:', err);
-      res.status(500).json({ 
-        message: 'Error deleting purchase', 
-        error: err.message 
-      });
-    }
-  }
-);
-
-// MANUFACTURER: Manufacture product from combined materials (2-3 materials) - COMPLETELY UPDATED
-apiRouter.post(
-  '/manufacturer/manufacture-combined',
-  authenticateToken,
-  authorizeRole('manufacturers'),
-  upload.single('image'),
-  async (req, res) => {
-    try {
-      console.log('🔍 STARTING COMBINED MANUFACTURING PROCESS');
-      console.log('📦 Request body:', req.body);
-      console.log('🖼️ File uploaded:', req.file ? `Yes - ${req.file.originalname}` : 'No');
-      console.log('👤 User:', req.user.email, 'ID:', req.user.id);
-      
-      const { name, description, quantity, price, materialIds } = req.body;
-      
-      // Validate required fields
-      if (!name || !description || !quantity || !price || !materialIds) {
-        console.log('❌ Missing required fields:', { 
-          name: !!name, 
-          description: !!description, 
-          quantity: !!quantity, 
-          price: !!price, 
-          materialIds: !!materialIds 
-        });
-        return res.status(400).json({ 
-          message: 'All fields are required including material IDs',
-          required: ['name', 'description', 'quantity', 'price', 'materialIds']
-        });
-      }
-
-      // Validate image
-      if (!req.file) {
-        console.log('❌ No image file provided');
-        return res.status(400).json({ 
-          message: 'Product image is required' 
-        });
-      }
-
-      // Validate file type
-      const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
-      if (!allowedTypes.includes(req.file.mimetype)) {
-        console.log('❌ Invalid file type:', req.file.mimetype);
-        return res.status(400).json({ 
-          message: 'Only JPEG, PNG and WebP images are allowed' 
-        });
-      }
-
-      // Parse material IDs
-      let parsedMaterialIds;
-      try {
-        parsedMaterialIds = JSON.parse(materialIds);
-        console.log('✅ Parsed material IDs:', parsedMaterialIds);
-      } catch (parseError) {
-        console.log('❌ Error parsing materialIds:', parseError);
-        return res.status(400).json({ 
-          message: 'Invalid material IDs format. Should be a JSON array.' 
-        });
-      }
-      
-      // Validate number of materials
-      if (!Array.isArray(parsedMaterialIds)) {
-        console.log('❌ materialIds is not an array:', typeof parsedMaterialIds);
-        return res.status(400).json({ 
-          message: 'Material IDs must be an array' 
-        });
-      }
-      
-      if (parsedMaterialIds.length < 2 || parsedMaterialIds.length > 3) {
-        console.log('❌ Invalid number of materials:', parsedMaterialIds.length);
-        return res.status(400).json({ 
-          message: 'You must select 2-3 materials to combine' 
-        });
-      }
-
-      // Find all selected materials
-      console.log('🔍 Looking for materials with IDs:', parsedMaterialIds);
-      const materials = await PurchasedMaterial.find({
-        _id: { $in: parsedMaterialIds },
-        manufacturerId: req.user.id,
-        status: 'available'
-      });
-
-      console.log(`✅ Found ${materials.length} materials out of ${parsedMaterialIds.length} requested`);
-
-      // Check if all materials were found
-      if (materials.length !== parsedMaterialIds.length) {
-        const foundIds = materials.map(m => m._id.toString());
-        const missingIds = parsedMaterialIds.filter(id => !foundIds.includes(id));
-        console.log('❌ Missing materials IDs:', missingIds);
-        
-        return res.status(404).json({ 
-          message: 'Some materials not found or already used',
-          missingIds: missingIds
-        });
-      }
-
-      // Log found materials
-      materials.forEach((material, index) => {
-        console.log(`📦 Material ${index + 1}:`, {
-          id: material._id,
-          name: material.productName,
-          status: material.status,
-          hasLocation: !!material.location,
-          location: material.location
-        });
-      });
-
-      // Get manufacturer details
-      const manufacturer = await User.findById(req.user.id);
-      if (!manufacturer) {
-        console.log('❌ Manufacturer not found:', req.user.id);
-        return res.status(404).json({ message: 'Manufacturer not found' });
-      }
-      console.log('✅ Manufacturer found:', manufacturer.email);
-
-      // Find location from materials
-      let location = {
-        lat: 28.6139,  // Default to Delhi coordinates
-        lng: 77.2090,
-        address: 'Default location'
-      };
-
-      // Try to get location from first material with valid location
-      for (const material of materials) {
-        if (material.location && 
-            material.location.lat !== undefined && 
-            material.location.lng !== undefined && 
-            material.location.address) {
-          
-          console.log('📍 Found valid location in material:', material.productName);
-          location = {
-            lat: Number(material.location.lat) || 28.6139,
-            lng: Number(material.location.lng) || 77.2090,
-            address: String(material.location.address) || 'Default location'
-          };
-          break;
-        }
-      }
-      
-      console.log('✅ Using location:', location);
-
-      // Validate numeric inputs
-      const parsedQuantity = parseInt(quantity);
-      const parsedPrice = parseFloat(price);
-      
-      if (isNaN(parsedQuantity) || parsedQuantity <= 0) {
-        return res.status(400).json({ 
-          message: 'Quantity must be a positive number' 
-        });
-      }
-      
-      if (isNaN(parsedPrice) || parsedPrice <= 0) {
-        return res.status(400).json({ 
-          message: 'Price must be a positive number' 
-        });
-      }
-
-      // Generate a unique transaction hash
-      const txHash = `0x${Date.now().toString(16)}${Math.random().toString(16).substr(2, 8)}`;
-      console.log('🔗 Generated transaction hash:', txHash);
-
-      // Create manufactured product
-      const manufacturedProduct = new ManufacturedProduct({
-        name: String(name),
-        description: String(description),
-        price: parsedPrice,
-        quantity: parsedQuantity,
-        image: req.file.path, // Cloudinary URL
-        location: {
-          lat: location.lat,
-          lng: location.lng,
-          address: location.address
-        },
-        materialId: materials[0]._id, // Reference to first material (for compatibility)
-        manufacturerId: manufacturer._id,
-        manufacturerName: manufacturer.name,
-        company: manufacturer.company,
-        status: 'active',
-        usedMaterials: materials.map(m => m.productName),
-        usedMaterialIds: materials.map(m => m._id) // Store all material IDs
-
-      });
-
-      console.log('💾 Saving manufactured product to database...');
-      await manufacturedProduct.save();
-      console.log('✅ Manufactured product saved:', manufacturedProduct._id);
-
-      // Mark all used materials as 'used'
-      console.log('🔄 Updating material status to "used"...');
-      await PurchasedMaterial.updateMany(
-        { _id: { $in: parsedMaterialIds } },
-        { $set: { status: 'used' } }
-      );
-      console.log('✅ Materials marked as used');
-
-      console.log('🎉 COMBINED MANUFACTURING COMPLETE!');
-      console.log('📊 Summary:', {
-        productId: manufacturedProduct._id,
-        productName: manufacturedProduct.name,
-        materialsUsed: materials.map(m => m.productName),
-        manufacturer: manufacturer.email,
-        quantity: manufacturedProduct.quantity,
-        price: manufacturedProduct.price,
-        location: manufacturedProduct.location
-      });
-
-      res.status(201).json({
-        message: 'Product manufactured successfully from combined materials',
-        product: manufacturedProduct,
-        materialsUsed: materials.map(m => ({
-          id: m._id,
-          name: m.productName
-        }))
-      });
-
-    } catch (err) {
-      console.error('❌ COMBINED MANUFACTURING ERROR:', err);
-      console.error('❌ Error name:', err.name);
-      console.error('❌ Error message:', err.message);
-      console.error('❌ Error stack:', err.stack);
-      console.error('❌ Request details:', {
-        body: req.body,
-        file: req.file,
-        user: req.user,
-        timestamp: new Date().toISOString()
-      });
-      
-      res.status(500).json({ 
-        message: 'Error manufacturing combined product',
-        error: err.message,
-        errorType: err.name,
-        details: process.env.NODE_ENV === 'development' ? err.stack : undefined,
-        timestamp: new Date().toISOString()
-      });
-    }
-  }
-);
-
-/* --- Admin Routes --- */
-apiRouter.get(
-  '/admin/users',
-  authenticateToken,
-  authorizeRole('admin'),
-  async (req, res) => {
-    try {
-      const users = await User.find().select('-password');
-      res.json({ users });
-    } catch (err) {
-      res.status(500).json({ message: 'Error fetching users' });
-    }
-  }
-);
-
-apiRouter.get(
-  '/admin/stats',
-  authenticateToken,
-  authorizeRole('admin'),
-  async (req, res) => {
-    try {
-      const totalUsers = await User.countDocuments();
-      const activeUsers = await User.countDocuments({ isActive: true });
-      const usersByRole = await User.aggregate([
-        { $group: { _id: '$role', count: { $sum: 1 } } }
-      ]);
-
-      res.json({
-        totalUsers,
-        activeUsers,
-        inactiveUsers: totalUsers - activeUsers,
-        usersByRole
-      });
-    } catch (err) {
-      res.status(500).json({ message: 'Error fetching stats' });
-    }
-  }
-);
-
-/* ===================== WALLET ROUTES ===================== */
-
-// GET user's wallet address
-apiRouter.get('/users/:userId/wallet', authenticateToken, async (req, res) => {
+apiRouter.post('/products', authenticateToken, upload.single('image'), async (req, res) => {
   try {
-    const { userId } = req.params;
-    
-    console.log(`🔍 Fetching wallet for user: ${userId}`);
-    
-    const user = await User.findById(userId).select('walletAddress name role company');
-    
-    if (!user) {
-      console.log(`❌ User not found: ${userId}`);
-      return res.status(404).json({ 
-        message: 'User not found',
-        walletAddress: null 
-      });
+    if (req.user.role !== 'suppliers') {
+      return res.status(403).json({ message: 'Only suppliers can add products' });
     }
+
+    const { name, description, quantity, unit, price, lat, lng, address } = req.body;
+
+    if (!name || !quantity || !price || !lat || !lng || !address) {
+      return res.status(400).json({ message: 'Missing required fields' });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ message: 'Product image is required' });
+    }
+
+    const user = await User.findById(req.user.userId);
     
-    console.log(`✅ User found: ${user.name}, wallet: ${user.walletAddress || 'not set'}`);
-    
-    res.json({ 
-      walletAddress: user.walletAddress || null,
-      name: user.name,
-      role: user.role,
+    const product = new Product({
+      name,
+      description: description || '',
+      quantity: Number(quantity),
+      unit: unit || 'pieces',
+      price: Number(price),
+      image: req.file.path,
+      location: {
+        lat: Number(lat),
+        lng: Number(lng),
+        address
+      },
+      supplierId: req.user.userId,
+      supplierName: user.name,
       company: user.company
     });
+
+    await product.save();
     
+    console.log(`✅ Product added by supplier ${user.email}: ${name}`);
+
+    res.status(201).json({ 
+      message: 'Product created successfully', 
+      product 
+    });
+
   } catch (err) {
-    console.error('❌ Error fetching user wallet:', err);
+    console.error('❌ Error creating product:', err);
     res.status(500).json({ 
       message: 'Server error',
       error: err.message 
@@ -1809,44 +507,1257 @@ apiRouter.get('/users/:userId/wallet', authenticateToken, async (req, res) => {
   }
 });
 
-// UPDATE user's wallet address
-apiRouter.put('/users/wallet', authenticateToken, async (req, res) => {
+apiRouter.get('/supplier/products', authenticateToken, async (req, res) => {
   try {
-    const { walletAddress } = req.body;
-    
-    console.log(`💳 Updating wallet for user: ${req.user.id}`);
-    console.log(`💳 New wallet address: ${walletAddress}`);
-    
-    // Validate
-    if (!walletAddress) {
-      return res.status(400).json({ message: 'Wallet address is required' });
+    if (req.user.role !== 'suppliers') {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
+    const products = await Product.find({ supplierId: req.user.userId })
+      .sort({ createdAt: -1 });
+
+    res.json(products);
+
+  } catch (err) {
+    console.error('❌ Error fetching supplier products:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+apiRouter.get('/products/available', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role === 'manufacturers') {
+      const products = await Product.find({ quantity: { $gt: 0 } })
+        .sort({ createdAt: -1 });
+      return res.json(products);
     }
     
-    if (!/^0x[a-fA-F0-9]{40}$/.test(walletAddress)) {
-      return res.status(400).json({ message: 'Invalid Ethereum wallet address format' });
+    if (req.user.role === 'customers') {
+      const products = await ManufacturedProduct.find({ 
+        status: 'available',
+        quantity: { $gt: 0 }
+      })
+        .populate('manufacturerId', 'name company')
+        .sort({ createdAt: -1 });
+      return res.json(products);
     }
     
-    if (walletAddress === '0x0000000000000000000000000000000000000000') {
-      return res.status(400).json({ message: 'Cannot use burn address as wallet' });
+    res.status(403).json({ message: 'Access denied' });
+
+  } catch (err) {
+    console.error('❌ Error fetching available products:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+/* ===================== MANUFACTURER ROUTES ===================== */
+
+apiRouter.post('/manufacturer/purchase', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'manufacturers') {
+      return res.status(403).json({ message: 'Only manufacturers can purchase materials' });
     }
+
+    const { productId, quantity, txHash } = req.body;
+
+    if (!productId || !quantity || !txHash) {
+      return res.status(400).json({ message: 'Missing required fields' });
+    }
+
+    const product = await Product.findById(productId);
+    if (!product) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
+
+    if (product.quantity < quantity) {
+      return res.status(400).json({ message: 'Insufficient quantity available' });
+    }
+
+    const manufacturer = await User.findById(req.user.userId);
+
+    const purchasedMaterial = new PurchasedMaterial({
+      productId: product._id,
+      originalProductId: product._id,
+      productName: product.name,
+      manufacturerId: req.user.userId,
+      manufacturerName: manufacturer.name,
+      supplierId: product.supplierId,
+      supplierName: product.supplierName,
+      quantity,
+      price: product.price,
+      image: product.image,
+      location: product.location,
+      txHash,
+      status: 'available'
+    });
+
+    await purchasedMaterial.save();
+
+    product.quantity -= quantity;
+    await product.save();
+
+    const transaction = new Transaction({
+      productId: product._id,
+      productName: product.name,
+      buyerId: req.user.userId,
+      buyerName: manufacturer.name,
+      sellerId: product.supplierId,
+      sellerName: product.supplierName,
+      quantity,
+      amount: product.price * quantity,
+      txHash,
+      status: 'completed'
+    });
+
+    await transaction.save();
+
+    console.log(`✅ Material purchased: ${product.name} by ${manufacturer.email}`);
+
+    res.status(201).json({
+      message: 'Material purchased successfully',
+      purchasedMaterial,
+      transaction
+    });
+
+  } catch (err) {
+    console.error('❌ Error purchasing material:', err);
+    res.status(500).json({ 
+      message: 'Server error',
+      error: err.message 
+    });
+  }
+});
+
+apiRouter.get('/manufacturer/materials', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'manufacturers') {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
+    const materials = await PurchasedMaterial.find({ 
+      manufacturerId: req.user.userId,
+      status: 'available'
+    }).sort({ purchasedAt: -1 });
+
+    res.json(materials);
+
+  } catch (err) {
+    console.error('❌ Error fetching materials:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+apiRouter.post('/manufacturer/products', authenticateToken, upload.fields([
+  { name: 'mainImage', maxCount: 1 },
+  { name: 'galleryImages', maxCount: 5 }
+]), async (req, res) => {
+  try {
+    if (req.user.role !== 'manufacturers') {
+      return res.status(403).json({ message: 'Only manufacturers can create products' });
+    }
+
+    const { 
+      name, description, price, quantity, 
+      rawMaterials, contractAddress, tokenId, txHash,
+      brand, category, weight, dimensions, color, material, 
+      warranty, certifications, isOrganic, expiryDate
+    } = req.body;
+
+    if (!name || !description || !price || !quantity) {
+      return res.status(400).json({ message: 'Missing required fields' });
+    }
+
+    if (!req.files || !req.files.mainImage) {
+      return res.status(400).json({ message: 'Main product image is required' });
+    }
+
+    const manufacturer = await User.findById(req.user.userId);
+
+    const mainImageUrl = req.files.mainImage[0].path;
+    const galleryImageUrls = req.files.galleryImages 
+      ? req.files.galleryImages.map(file => file.path)
+      : [];
+
+    const manufacturedProduct = new ManufacturedProduct({
+      name,
+      description,
+      price: Number(price),
+      quantity: Number(quantity),
+      image: mainImageUrl,
+      galleryImages: galleryImageUrls,
+      productDetails: {
+        brand: brand || '',
+        category: category || '',
+        weight: weight || '',
+        dimensions: dimensions || '',
+        color: color || '',
+        material: material || '',
+        warranty: warranty || '',
+        certifications: certifications ? JSON.parse(certifications) : [],
+        isOrganic: isOrganic === 'true',
+        expiryDate: expiryDate || null
+      },
+      manufacturerId: req.user.userId,
+      manufacturerName: manufacturer.name,
+      company: manufacturer.company,
+      rawMaterials: rawMaterials ? JSON.parse(rawMaterials) : [],
+      blockchainData: {
+        contractAddress: contractAddress || '',
+        tokenId: tokenId || '',
+        txHash: txHash || ''
+      },
+      status: 'available'
+    });
+
+    await manufacturedProduct.save();
+
+    if (rawMaterials) {
+      const materials = JSON.parse(rawMaterials);
+      for (const mat of materials) {
+        await PurchasedMaterial.findByIdAndUpdate(
+          mat.materialId,
+          { status: 'used' }
+        );
+      }
+    }
+
+    console.log(`✅ Product manufactured: ${name} by ${manufacturer.email}`);
+
+    res.status(201).json({
+      message: 'Product created successfully',
+      product: manufacturedProduct
+    });
+
+  } catch (err) {
+    console.error('❌ Error creating manufactured product:', err);
+    res.status(500).json({ 
+      message: 'Server error',
+      error: err.message 
+    });
+  }
+});
+
+apiRouter.get('/manufacturer/products', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'manufacturers') {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
+    const products = await ManufacturedProduct.find({ 
+      manufacturerId: req.user.userId 
+    }).sort({ createdAt: -1 });
+
+    res.json(products);
+
+  } catch (err) {
+    console.error('❌ Error fetching manufactured products:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+apiRouter.get('/products/:productId/detail', authenticateToken, async (req, res) => {
+  try {
+    const { productId } = req.params;
     
-    // Update
+    const product = await ManufacturedProduct.findById(productId)
+      .populate('manufacturerId', 'name email company');
+    
+    if (!product) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
+
+    res.json(product);
+
+  } catch (err) {
+    console.error('❌ Error fetching product detail:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+/* ===================== ORDER ROUTES (NEW) ===================== */
+
+// Create Order (Customer Checkout)
+apiRouter.post('/orders/create', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'customers') {
+      return res.status(403).json({ message: 'Only customers can create orders' });
+    }
+
+    const { items, deliveryAddress, totalAmount, paymentDetails } = req.body;
+    
+    if (!items || items.length === 0) {
+      return res.status(400).json({ message: 'Order must contain at least one item' });
+    }
+
+    if (!deliveryAddress || !deliveryAddress.name || !deliveryAddress.phone || 
+        !deliveryAddress.street || !deliveryAddress.city || 
+        !deliveryAddress.state || !deliveryAddress.pincode) {
+      return res.status(400).json({ message: 'Complete delivery address is required' });
+    }
+
+    // Generate unique order number
+    const orderNumber = `ORD-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    
+    // Generate 6-digit OTP for delivery verification
+    const deliveryOTP = Math.floor(100000 + Math.random() * 900000).toString();
+
+    const order = new Order({
+      orderNumber,
+      customer: req.user.userId,
+      items,
+      totalAmount,
+      deliveryAddress,
+      deliveryOTP,
+      paymentDetails,
+      trackingHistory: [{
+        status: 'pending',
+        message: 'Order placed successfully',
+        timestamp: new Date()
+      }]
+    });
+
+    await order.save();
+
+    // Update product quantities
+    for (const item of items) {
+      await ManufacturedProduct.findByIdAndUpdate(
+        item.product,
+        { $inc: { quantity: -item.quantity } }
+      );
+    }
+
+    console.log(`✅ Order created: ${order.orderNumber} by customer ${req.user.email}`);
+
+    res.status(201).json({
+      message: 'Order created successfully',
+      order,
+      orderNumber: order.orderNumber,
+      deliveryOTP: order.deliveryOTP
+    });
+  } catch (error) {
+    console.error('❌ Error creating order:', error);
+    res.status(500).json({ message: 'Failed to create order', error: error.message });
+  }
+});
+
+// Get Customer Orders
+apiRouter.get('/customer/orders', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'customers') {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
+    const orders = await Order.find({ customer: req.user.userId })
+      .populate('items.product')
+      .populate('deliveryPartner', 'name email company')
+      .sort({ createdAt: -1 });
+
+    res.json(orders);
+  } catch (error) {
+    console.error('❌ Error fetching orders:', error);
+    res.status(500).json({ message: 'Failed to fetch orders' });
+  }
+});
+// Get Customer Purchase History (for blockchain tracking)
+apiRouter.get('/customer/purchases', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'customers') {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
+    // Get all orders for the customer with populated product details
+    const orders = await Order.find({ customer: req.user.userId })
+      .populate('items.product')
+      .populate('deliveryPartner', 'name email company')
+      .sort({ createdAt: -1 });
+
+    res.json(orders);
+  } catch (error) {
+    console.error('❌ Error fetching customer purchases:', error);
+    res.status(500).json({ message: 'Failed to fetch purchases' });
+  }
+});
+
+// Verify OTP and Confirm Delivery (Customer)
+apiRouter.post('/orders/:orderId/verify-otp', authenticateToken, async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { otp } = req.body;
+
+    const order = await Order.findOne({ 
+      _id: orderId, 
+      customer: req.user.userId 
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    if (order.deliveryOTP !== otp) {
+      return res.status(400).json({ message: 'Invalid OTP' });
+    }
+
+    order.status = 'delivered';
+    order.deliveredAt = new Date();
+    order.trackingHistory.push({
+      status: 'delivered',
+      message: 'Order delivered successfully and verified by customer',
+      timestamp: new Date()
+    });
+
+    await order.save();
+
+    console.log(`✅ Order ${order.orderNumber} delivered and verified`);
+
+    res.json({ message: 'Delivery verified successfully', order });
+  } catch (error) {
+    console.error('❌ Error verifying OTP:', error);
+    res.status(500).json({ message: 'Failed to verify OTP' });
+  }
+});
+
+// Submit Feedback (Customer)
+apiRouter.post('/orders/:orderId/feedback', authenticateToken, async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { rating, comment } = req.body;
+
+    const order = await Order.findOne({ 
+      _id: orderId, 
+      customer: req.user.userId 
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    if (order.status !== 'delivered') {
+      return res.status(400).json({ message: 'Can only submit feedback for delivered orders' });
+    }
+
+    order.feedback = {
+      rating,
+      comment,
+      submitted: true,
+      submittedAt: new Date()
+    };
+
+    await order.save();
+
+    console.log(`✅ Feedback submitted for order ${order.orderNumber}`);
+
+    res.json({ message: 'Feedback submitted successfully', order });
+  } catch (error) {
+    console.error('❌ Error submitting feedback:', error);
+    res.status(500).json({ message: 'Failed to submit feedback' });
+  }
+});
+
+// Request Return (Customer)
+apiRouter.post('/orders/:orderId/return', authenticateToken, async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { reason } = req.body;
+
+    const order = await Order.findOne({ 
+      _id: orderId, 
+      customer: req.user.userId 
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    if (order.status !== 'delivered') {
+      return res.status(400).json({ message: 'Can only return delivered orders' });
+    }
+
+    // Check if within 14 days
+    const deliveredDate = new Date(order.deliveredAt);
+    const currentDate = new Date();
+    const daysDiff = Math.floor((currentDate - deliveredDate) / (1000 * 60 * 60 * 24));
+    
+    if (daysDiff > 14) {
+      return res.status(400).json({ message: 'Return period has expired (14 days)' });
+    }
+
+    order.returnRequest = {
+      requested: true,
+      reason,
+      requestedAt: new Date(),
+      status: 'pending'
+    };
+
+    order.trackingHistory.push({
+      status: 'return_requested',
+      message: `Return requested: ${reason}`,
+      timestamp: new Date()
+    });
+
+    await order.save();
+
+    console.log(`✅ Return requested for order ${order.orderNumber}`);
+
+    res.json({ message: 'Return request submitted successfully', order });
+  } catch (error) {
+    console.error('❌ Error requesting return:', error);
+    res.status(500).json({ message: 'Failed to submit return request' });
+  }
+});
+
+/* ===================== DELIVERY PARTNER ROUTES (NEW) ===================== */
+
+// Get Delivery Assignments
+apiRouter.get('/delivery/assignments', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'delivery_partner') {
+      return res.status(403).json({ message: 'Access denied. Delivery partners only.' });
+    }
+
+    const assignments = await Order.find({ 
+      deliveryPartner: req.user.userId 
+    })
+      .populate('items.product')
+      .populate('customer', 'name email')
+      .sort({ assignedAt: -1 });
+
+    res.json(assignments);
+  } catch (error) {
+    console.error('❌ Error fetching assignments:', error);
+    res.status(500).json({ message: 'Failed to fetch assignments' });
+  }
+});
+// Get All Pending Orders (for delivery partners to see available assignments)
+apiRouter.get('/delivery/pending-orders', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'delivery_partner') {
+      return res.status(403).json({ message: 'Access denied. Delivery partners only.' });
+    }
+
+    // Find orders that are pending and not yet assigned to any delivery partner
+    const pendingOrders = await Order.find({ 
+      status: 'pending',
+      deliveryPartner: null
+    })
+      .populate('items.product')
+      .populate('customer', 'name email')
+      .sort({ createdAt: -1 });
+
+    res.json(pendingOrders);
+  } catch (error) {
+    console.error('❌ Error fetching pending orders:', error);
+    res.status(500).json({ message: 'Failed to fetch pending orders' });
+  }
+});
+
+// Get Delivery Stats
+apiRouter.get('/delivery/stats', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'delivery_partner') {
+      return res.status(403).json({ message: 'Access denied. Delivery partners only.' });
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const totalDeliveries = await Order.countDocuments({
+      deliveryPartner: req.user.userId,
+      status: 'delivered'
+    });
+
+    const completedToday = await Order.countDocuments({
+      deliveryPartner: req.user.userId,
+      status: 'delivered',
+      deliveredAt: { $gte: today }
+    });
+
+    const pending = await Order.countDocuments({
+      deliveryPartner: req.user.userId,
+      status: { $in: ['confirmed', 'out_for_delivery', 'near_location'] }
+    });
+
+    res.json({ totalDeliveries, completedToday, pending });
+  } catch (error) {
+    console.error('❌ Error fetching stats:', error);
+    res.status(500).json({ message: 'Failed to fetch stats' });
+  }
+});
+
+
+// Self-assign to a pending order (Delivery Partner)
+apiRouter.post('/delivery/self-assign/:orderId', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'delivery_partner') {
+      return res.status(403).json({ message: 'Access denied. Delivery partners only.' });
+    }
+
+    const { orderId } = req.params;
+
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    if (order.deliveryPartner) {
+      return res.status(400).json({ message: 'Order already assigned to another delivery partner' });
+    }
+
+    if (order.status !== 'pending') {
+      return res.status(400).json({ message: 'Order is not available for assignment' });
+    }
+
+    // Get delivery partner details
+    const deliveryPartner = await User.findById(req.user.userId);
+    if (!deliveryPartner) {
+      return res.status(404).json({ message: 'Delivery partner not found' });
+    }
+
+    // Assign the order
+    order.deliveryPartner = req.user.userId;
+    order.assignedAt = new Date();
+    order.status = 'confirmed';
+    
+    order.trackingHistory.push({
+      status: 'confirmed',
+      message: `Order confirmed and assigned to ${deliveryPartner.name}`,
+      timestamp: new Date(),
+      deliveryPartner: {
+        name: deliveryPartner.name,
+        phone: deliveryPartner.email
+      }
+    });
+
+    await order.save();
+
+    console.log(`✅ Order ${order.orderNumber} self-assigned to ${deliveryPartner.name}`);
+
+    res.json({ 
+      message: 'Successfully assigned to this order', 
+      order 
+    });
+  } catch (error) {
+    console.error('❌ Error self-assigning order:', error);
+    res.status(500).json({ message: 'Failed to assign order' });
+  }
+});
+
+// Update Order Status (Delivery Partner)
+apiRouter.put('/delivery/orders/:orderId/status', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'delivery_partner') {
+      return res.status(403).json({ message: 'Access denied. Delivery partners only.' });
+    }
+
+    const { orderId } = req.params;
+    const { status } = req.body;
+
+    const order = await Order.findOne({ 
+      _id: orderId, 
+      deliveryPartner: req.user.userId 
+    }).populate('deliveryPartner', 'name email');
+
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found or not assigned to you' });
+    }
+
+    const validTransitions = {
+      'confirmed': ['out_for_delivery'],
+      'out_for_delivery': ['near_location', 'delivered'],
+      'near_location': ['delivered']
+    };
+
+    if (!validTransitions[order.status]?.includes(status)) {
+      return res.status(400).json({ message: 'Invalid status transition' });
+    }
+
+    order.status = status;
+    
+    const statusMessages = {
+      'out_for_delivery': 'Package is out for delivery',
+      'near_location': 'Delivery partner is near your location',
+      'delivered': 'Package has been delivered'
+    };
+
+    order.trackingHistory.push({
+      status,
+      message: statusMessages[status] || `Status updated to ${status}`,
+      timestamp: new Date(),
+      deliveryPartner: {
+        name: order.deliveryPartner.name,
+        phone: order.deliveryPartner.email
+      }
+    });
+
+    if (status === 'delivered') {
+      order.deliveredAt = new Date();
+    }
+
+    await order.save();
+
+    console.log(`✅ Order ${order.orderNumber} status updated to ${status}`);
+
+    res.json({ message: 'Order status updated successfully', order });
+  } catch (error) {
+    console.error('❌ Error updating order status:', error);
+    res.status(500).json({ message: 'Failed to update order status' });
+  }
+});
+
+/* ===================== ADMIN ROUTES ===================== */
+
+apiRouter.get('/admin/users', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Access denied. Admins only.' });
+    }
+
+    const users = await User.find().select('-password').sort({ createdAt: -1 });
+    res.json(users);
+
+  } catch (err) {
+    console.error('❌ Error fetching users:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+apiRouter.get('/admin/products', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Access denied. Admins only.' });
+    }
+
+    const products = await Product.find()
+      .populate('supplierId', 'name email company')
+      .sort({ createdAt: -1 });
+
+    res.json(products);
+
+  } catch (err) {
+    console.error('❌ Error fetching products:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+apiRouter.get('/admin/manufactured-products', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Access denied. Admins only.' });
+    }
+
+    const products = await ManufacturedProduct.find()
+      .populate('manufacturerId', 'name email company')
+      .sort({ createdAt: -1 });
+
+    res.json(products);
+
+  } catch (err) {
+    console.error('❌ Error fetching manufactured products:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+apiRouter.get('/admin/transactions', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Access denied. Admins only.' });
+    }
+
+    const transactions = await Transaction.find()
+      .populate('buyerId', 'name email')
+      .populate('sellerId', 'name email')
+      .sort({ timestamp: -1 });
+
+    res.json(transactions);
+
+  } catch (err) {
+    console.error('❌ Error fetching transactions:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get All Orders (Admin)
+apiRouter.get('/admin/orders', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Access denied. Admins only.' });
+    }
+
+    const orders = await Order.find()
+      .populate('customer', 'name email company')
+      .populate('items.product')
+      .populate('deliveryPartner', 'name email company')
+      .sort({ createdAt: -1 });
+
+    res.json(orders);
+  } catch (error) {
+    console.error('❌ Error fetching all orders:', error);
+    res.status(500).json({ message: 'Failed to fetch orders' });
+  }
+});
+
+// Assign Delivery Partner (Admin)
+apiRouter.put('/admin/orders/:orderId/assign', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Access denied. Admins only.' });
+    }
+
+    const { orderId } = req.params;
+    const { deliveryPartnerId } = req.body;
+
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    const deliveryPartner = await User.findOne({ 
+      _id: deliveryPartnerId, 
+      role: 'delivery_partner' 
+    });
+
+    if (!deliveryPartner) {
+      return res.status(404).json({ message: 'Delivery partner not found' });
+    }
+
+    order.deliveryPartner = deliveryPartnerId;
+    order.assignedAt = new Date();
+    order.status = 'confirmed';
+    
+    order.trackingHistory.push({
+      status: 'confirmed',
+      message: `Order confirmed and assigned to ${deliveryPartner.name}`,
+      timestamp: new Date(),
+      deliveryPartner: {
+        name: deliveryPartner.name,
+        phone: deliveryPartner.email
+      }
+    });
+
+    await order.save();
+
+    console.log(`✅ Order ${order.orderNumber} assigned to ${deliveryPartner.name}`);
+
+    res.json({ message: 'Delivery partner assigned successfully', order });
+  } catch (error) {
+    console.error('❌ Error assigning delivery partner:', error);
+    res.status(500).json({ message: 'Failed to assign delivery partner' });
+  }
+});
+
+// Get All Delivery Partners (Admin)
+apiRouter.get('/admin/delivery-partners', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Access denied. Admins only.' });
+    }
+
+    const deliveryPartners = await User.find({ role: 'delivery_partner' })
+      .select('name email company isActive createdAt');
+
+    res.json(deliveryPartners);
+  } catch (error) {
+    console.error('❌ Error fetching delivery partners:', error);
+    res.status(500).json({ message: 'Failed to fetch delivery partners' });
+  }
+});
+
+apiRouter.put('/admin/users/:userId/status', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Access denied. Admins only.' });
+    }
+
+    const { userId } = req.params;
+    const { isActive } = req.body;
+
     const user = await User.findByIdAndUpdate(
-      req.user.id,
-      { walletAddress },
+      userId,
+      { isActive },
       { new: true }
-    ).select('walletAddress name role company');
-    
+    ).select('-password');
+
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
-    
-    console.log(`✅ Wallet updated for ${user.name}: ${walletAddress}`);
-    
-    res.json({ 
-      message: 'Wallet address saved successfully',
-      walletAddress: user.walletAddress,
+
+    console.log(`✅ User ${user.email} status updated: ${isActive ? 'active' : 'inactive'}`);
+
+    res.json({ message: 'User status updated', user });
+
+  } catch (err) {
+    console.error('❌ Error updating user status:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+/* ===================== MANUFACTURER ROUTES ===================== */
+
+// Buy raw materials (Manufacturer purchases from Supplier)
+apiRouter.post('/products/buy-raw', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'manufacturers') {
+      return res.status(403).json({ message: 'Access denied. Manufacturers only.' });
+    }
+
+    const { productId, quantity, externalTxHash, blockchainReceipt } = req.body;
+
+    if (!productId || !quantity || quantity <= 0) {
+      return res.status(400).json({ message: 'Invalid purchase data' });
+    }
+
+    // Find the original product (raw material from supplier)
+    const product = await Product.findById(productId).populate('supplierId');
+    if (!product) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
+
+    // Check if enough quantity is available
+    if (product.quantity < quantity) {
+      return res.status(400).json({ 
+        message: `Not enough stock. Available: ${product.quantity}` 
+      });
+    }
+
+    // Calculate total amount
+    const totalAmount = product.price * quantity;
+
+    // Get manufacturer details
+    const manufacturer = await User.findById(req.user.userId);
+    if (!manufacturer) {
+      return res.status(404).json({ message: 'Manufacturer not found' });
+    }
+
+    // Create purchased material record
+    const purchasedMaterial = new PurchasedMaterial({
+      productId: product._id,
+      originalProductId: product._id,
+      productName: product.name,
+      manufacturerId: manufacturer._id,
+      manufacturerName: manufacturer.name,
+      supplierId: product.supplierId._id,
+      supplierName: product.supplierId.name,
+      quantity: quantity,
+      price: totalAmount,
+      image: product.image,
+      location: product.location,
+      txHash: externalTxHash || `TX-${Date.now()}`,
+      status: 'available',
+      purchasedAt: new Date()
+    });
+
+    await purchasedMaterial.save();
+
+    // Create transaction record
+    const transaction = new Transaction({
+      productId: product._id,
+      productName: product.name,
+      buyerId: manufacturer._id,
+      buyerName: manufacturer.name,
+      sellerId: product.supplierId._id,
+      sellerName: product.supplierId.name,
+      quantity: quantity,
+      amount: totalAmount,
+      txHash: externalTxHash || `TX-${Date.now()}`,
+      status: 'completed',
+      timestamp: new Date()
+    });
+
+    await transaction.save();
+
+    // Update product quantity
+    product.quantity -= quantity;
+    await product.save();
+
+    console.log(`✅ Material purchased: ${manufacturer.name} bought ${quantity} units of ${product.name}`);
+
+    res.json({
+      message: 'Material purchased successfully',
+      purchasedMaterial,
+      transaction,
+      remainingStock: product.quantity
+    });
+
+  } catch (err) {
+    console.error('❌ Error purchasing material:', err);
+    res.status(500).json({ 
+      message: 'Server error',
+      error: err.message 
+    });
+  }
+});
+
+// Get manufacturer's purchase history
+apiRouter.get('/manufacturer/purchases', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'manufacturers') {
+      return res.status(403).json({ message: 'Access denied. Manufacturers only.' });
+    }
+
+    const transactions = await Transaction.find({ buyerId: req.user.userId })
+      .populate('productId')
+      .populate('sellerId', 'name email company')
+      .sort({ timestamp: -1 });
+
+    res.json(transactions);
+
+  } catch (err) {
+    console.error('❌ Error fetching purchases:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get manufacturer's bought materials (available for manufacturing)
+apiRouter.get('/manufacturer/bought-materials', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'manufacturers') {
+      return res.status(403).json({ message: 'Access denied. Manufacturers only.' });
+    }
+
+    const materials = await PurchasedMaterial.find({ 
+      manufacturerId: req.user.userId,
+      status: 'available'
+    })
+      .populate('supplierId', 'name email company')
+      .sort({ purchasedAt: -1 });
+
+    res.json(materials);
+
+  } catch (err) {
+    console.error('❌ Error fetching bought materials:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get manufacturer's manufactured products
+apiRouter.get('/manufacturer/products', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'manufacturers') {
+      return res.status(403).json({ message: 'Access denied. Manufacturers only.' });
+    }
+
+    const products = await ManufacturedProduct.find({ 
+      manufacturerId: req.user.userId 
+    })
+      .populate('rawMaterials.materialId')
+      .sort({ createdAt: -1 });
+
+    res.json(products);
+
+  } catch (err) {
+    console.error('❌ Error fetching manufactured products:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Create a new manufactured product from raw materials
+apiRouter.post('/manufacturer/create-product', authenticateToken, upload.single('image'), async (req, res) => {
+  try {
+    if (req.user.role !== 'manufacturers') {
+      return res.status(403).json({ message: 'Access denied. Manufacturers only.' });
+    }
+
+    const { name, description, quantity, price, materialId } = req.body;
+
+    if (!name || !description || !quantity || !price || !materialId) {
+      return res.status(400).json({ message: 'All fields are required' });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ message: 'Product image is required' });
+    }
+
+    // Find the material being used
+    const material = await PurchasedMaterial.findById(materialId);
+    if (!material) {
+      return res.status(404).json({ message: 'Material not found' });
+    }
+
+    if (material.manufacturerId.toString() !== req.user.userId) {
+      return res.status(403).json({ message: 'You do not own this material' });
+    }
+
+    if (material.status !== 'available') {
+      return res.status(400).json({ message: 'Material has already been used' });
+    }
+
+    // Get manufacturer details
+    const manufacturer = await User.findById(req.user.userId);
+    if (!manufacturer) {
+      return res.status(404).json({ message: 'Manufacturer not found' });
+    }
+
+    // Create manufactured product
+    const manufacturedProduct = new ManufacturedProduct({
+      name,
+      description,
+      price: parseFloat(price),
+      quantity: parseInt(quantity),
+      image: req.file.path,
+      manufacturerId: manufacturer._id,
+      manufacturerName: manufacturer.name,
+      company: manufacturer.company,
+      rawMaterials: [{
+        materialId: material._id,
+        materialName: material.productName,
+        quantity: material.quantity
+      }],
+      status: 'available'
+    });
+
+    await manufacturedProduct.save();
+
+    // Mark material as used
+    material.status = 'used';
+    await material.save();
+
+    console.log(`✅ Product manufactured: ${manufacturer.name} created ${name}`);
+
+    res.json({
+      message: 'Product manufactured successfully',
+      product: manufacturedProduct
+    });
+
+  } catch (err) {
+    console.error('❌ Error manufacturing product:', err);
+    res.status(500).json({ 
+      message: 'Server error',
+      error: err.message 
+    });
+  }
+});
+
+// Create a manufactured product by combining multiple raw materials
+apiRouter.post('/manufacturer/manufacture-combined', authenticateToken, upload.single('image'), async (req, res) => {
+  try {
+    if (req.user.role !== 'manufacturers') {
+      return res.status(403).json({ message: 'Access denied. Manufacturers only.' });
+    }
+
+    const { name, description, quantity, price, materialIds } = req.body;
+
+    if (!name || !description || !quantity || !price || !materialIds) {
+      return res.status(400).json({ message: 'All fields are required' });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ message: 'Product image is required' });
+    }
+
+    // Parse materialIds from JSON string
+    let parsedMaterialIds;
+    try {
+      parsedMaterialIds = JSON.parse(materialIds);
+    } catch (err) {
+      return res.status(400).json({ message: 'Invalid material IDs format' });
+    }
+
+    if (!Array.isArray(parsedMaterialIds) || parsedMaterialIds.length < 2 || parsedMaterialIds.length > 3) {
+      return res.status(400).json({ message: 'Please select 2-3 materials to combine' });
+    }
+
+    // Get manufacturer details
+    const manufacturer = await User.findById(req.user.userId);
+    if (!manufacturer) {
+      return res.status(404).json({ message: 'Manufacturer not found' });
+    }
+
+    // Find all materials and validate ownership and availability
+    const materials = await PurchasedMaterial.find({ 
+      _id: { $in: parsedMaterialIds } 
+    });
+
+    if (materials.length !== parsedMaterialIds.length) {
+      return res.status(404).json({ message: 'One or more materials not found' });
+    }
+
+    // Validate all materials
+    for (const material of materials) {
+      if (material.manufacturerId.toString() !== req.user.userId) {
+        return res.status(403).json({ 
+          message: `You do not own the material: ${material.productName}` 
+        });
+      }
+
+      if (material.status !== 'available') {
+        return res.status(400).json({ 
+          message: `Material "${material.productName}" has already been used` 
+        });
+      }
+    }
+
+    // Create the raw materials array for the manufactured product
+    const rawMaterialsArray = materials.map(material => ({
+      materialId: material._id,
+      materialName: material.productName,
+      quantity: material.quantity
+    }));
+
+    // Create manufactured product
+    const manufacturedProduct = new ManufacturedProduct({
+      name,
+      description,
+      price: parseFloat(price),
+      quantity: parseInt(quantity),
+      image: req.file.path,
+      manufacturerId: manufacturer._id,
+      manufacturerName: manufacturer.name,
+      company: manufacturer.company,
+      rawMaterials: rawMaterialsArray,
+      status: 'available'
+    });
+
+    await manufacturedProduct.save();
+
+    // Mark all materials as used
+    await PurchasedMaterial.updateMany(
+      { _id: { $in: parsedMaterialIds } },
+      { $set: { status: 'used' } }
+    );
+
+    console.log(`✅ Combined product manufactured: ${manufacturer.name} created ${name} from ${materials.length} materials`);
+
+    res.json({
+      message: 'Combined product manufactured successfully',
+      product: manufacturedProduct,
+      materialsUsed: materials.length
+    });
+
+  } catch (err) {
+    console.error('❌ Error manufacturing combined product:', err);
+    res.status(500).json({ 
+      message: 'Server error',
+      error: err.message 
+    });
+  }
+});
+
+/* ===================== WALLET ROUTES ===================== */
+
+apiRouter.put('/user/wallet', authenticateToken, async (req, res) => {
+  try {
+    const { walletAddress } = req.body;
+
+    if (!walletAddress) {
+      return res.status(400).json({ message: 'Wallet address is required' });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      req.user.userId,
+      { walletAddress },
+      { new: true }
+    ).select('-password');
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    console.log(`✅ Wallet updated for ${user.email}: ${walletAddress}`);
+
+    res.json({
+      message: 'Wallet address updated successfully',
       user: {
+        _id: user._id,
+        email: user.email,
         name: user.name,
         role: user.role,
         company: user.company
@@ -1909,5 +1820,3 @@ app.listen(PORT, () => {
 ╚════════════════════════════════════════════╝
   `);
 });
-
-module.exports = app;
