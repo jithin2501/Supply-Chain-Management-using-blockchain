@@ -1040,14 +1040,14 @@ export default function ManufacturerDashboard() {
                               <div className="h-48 overflow-hidden">
                                 <img 
                                   src={material.image} 
-                                  alt={material.productName}
+                                  alt={material.name}
                                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" 
                                 />
                               </div>
                             )}
                             <div className="p-6">
                               <div className="flex items-start justify-between mb-3">
-                                <h4 className="text-lg font-bold text-gray-900 flex-1">{material.productName}</h4>
+                                <h4 className="text-lg font-bold text-gray-900 flex-1">{material.name}</h4>
                                 <span className="bg-green-100 text-green-700 px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest ml-2">
                                   Verified
                                 </span>
@@ -1417,7 +1417,7 @@ export default function ManufacturerDashboard() {
               <div className="mb-4 h-40 rounded-2xl overflow-hidden">
                 <img 
                   src={selectedProduct.image} 
-                  alt={selectedProduct.productName}
+                  alt={selectedProduct.name}
                   className="w-full h-full object-cover"
                 />
               </div>
@@ -1426,7 +1426,7 @@ export default function ManufacturerDashboard() {
             <div className="space-y-2 mb-4 text-sm">
               <div className="flex justify-between">
                 <span className="text-gray-600">Product:</span>
-                <span className="font-bold text-right ml-2">{selectedProduct.productName}</span>
+                <span className="font-bold text-right ml-2">{selectedProduct.name}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-600">Supplier:</span>
@@ -1786,7 +1786,7 @@ export default function ManufacturerDashboard() {
                         <div className="h-16 bg-gray-100 rounded-lg overflow-hidden">
                           <img
                             src={material.image}
-                            alt={material.productName}
+                            alt={material.name}
                             className="w-full h-full object-cover"
                           />
                         </div>

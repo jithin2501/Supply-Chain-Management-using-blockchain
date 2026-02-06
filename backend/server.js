@@ -550,6 +550,100 @@ apiRouter.get('/products/available', authenticateToken, async (req, res) => {
   }
 });
 
+// Alias route for /products/mine - same as /supplier/products
+apiRouter.get('/products/mine', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'suppliers') {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
+    const products = await Product.find({ supplierId: req.user.userId })
+      .sort({ createdAt: -1 });
+
+    console.log(`✅ Fetched ${products.length} products for supplier ${req.user.userId}`);
+    res.json(products);
+
+  } catch (err) {
+    console.error('❌ Error fetching supplier products:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get payment receipts for supplier (transactions where they sold materials)
+apiRouter.get('/supplier/receipts', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'suppliers') {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
+    // Find all transactions where this supplier was the seller
+    const receipts = await Transaction.find({ sellerId: req.user.userId })
+      .populate('buyerId', 'name email company')
+      .populate('productId', 'name image')
+      .sort({ timestamp: -1 });
+
+    console.log(`✅ Fetched ${receipts.length} payment receipts for supplier ${req.user.userId}`);
+    res.json(receipts);
+
+  } catch (err) {
+    console.error('❌ Error fetching payment receipts:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get single receipt details
+apiRouter.get('/supplier/receipts/:receiptId', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'suppliers') {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
+    const { receiptId } = req.params;
+    
+    const receipt = await Transaction.findOne({ 
+      _id: receiptId,
+      sellerId: req.user.userId 
+    })
+      .populate('buyerId', 'name email company')
+      .populate('productId', 'name image location');
+
+    if (!receipt) {
+      return res.status(404).json({ message: 'Receipt not found' });
+    }
+
+    console.log(`✅ Fetched receipt ${receiptId} for supplier ${req.user.userId}`);
+    res.json(receipt);
+
+  } catch (err) {
+    console.error('❌ Error fetching receipt details:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get materials that were purchased FROM this supplier (materials sold by supplier)
+apiRouter.get('/supplier/purchased-materials', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'suppliers') {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
+    // Find all materials where this supplier was the seller (supplierId matches)
+    const soldMaterials = await PurchasedMaterial.find({ 
+      supplierId: req.user.userId 
+    })
+      .populate('manufacturerId', 'name email company')
+      .sort({ purchasedAt: -1 });
+
+    console.log(`✅ Fetched ${soldMaterials.length} sold materials for supplier ${req.user.userId}`);
+    res.json(soldMaterials);
+
+  } catch (err) {
+    console.error('❌ Error fetching sold materials:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+
 /* ===================== MANUFACTURER ROUTES ===================== */
 
 apiRouter.post('/manufacturer/purchase', authenticateToken, async (req, res) => {

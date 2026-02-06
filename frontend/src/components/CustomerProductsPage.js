@@ -26,6 +26,7 @@ export default function CustomerProductsPage() {
   const [isMetaMaskInstalled, setIsMetaMaskInstalled] = useState(false);
   const [txStatus, setTxStatus] = useState(null);
   const [txStep, setTxStep] = useState(0);
+  const [loadingLocation, setLoadingLocation] = useState(false);
 
   // Delivery Address
   const [deliveryAddress, setDeliveryAddress] = useState({
@@ -217,6 +218,70 @@ export default function CustomerProductsPage() {
     }
   };
 
+  const disconnectWallet = () => {
+    setAccount(null);
+    localStorage.removeItem(`wallet_${user._id}`);
+  };
+
+
+  const getCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      alert('Geolocation is not supported by your browser');
+      return;
+    }
+
+    setLoadingLocation(true);
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const { latitude, longitude } = position.coords;
+        
+        try {
+          // Use reverse geocoding to get address
+          const response = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`
+          );
+          const data = await response.json();
+          
+          // Extract address components
+          const address = data.address || {};
+          
+          setDeliveryAddress(prev => ({
+            ...prev,
+            street: `${address.road || ''} ${address.house_number || ''}`.trim() || data.display_name,
+            city: address.city || address.town || address.village || '',
+            state: address.state || '',
+            pincode: address.postcode || ''
+          }));
+          
+          alert('Location loaded successfully! Please verify the details.');
+        } catch (error) {
+          console.error('Error getting address:', error);
+          alert('Could not fetch address details. Please enter manually.');
+        } finally {
+          setLoadingLocation(false);
+        }
+      },
+      (error) => {
+        console.error('Geolocation error:', error);
+        setLoadingLocation(false);
+        
+        if (error.code === error.PERMISSION_DENIED) {
+          alert('Location permission denied. Please enable location access in your browser settings.');
+        } else if (error.code === error.POSITION_UNAVAILABLE) {
+          alert('Location information unavailable. Please enter address manually.');
+        } else if (error.code === error.TIMEOUT) {
+          alert('Location request timed out. Please try again.');
+        } else {
+          alert('Unable to get location. Please enter address manually.');
+        }
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0
+      }
+    );
+  };
   const handleCheckout = async () => {
     if (!account) {
       await connectWallet();
@@ -719,19 +784,51 @@ export default function CustomerProductsPage() {
                       <span>₹{getTotalPrice()}</span>
                     </div>
                     
+                    {/* Wallet Connection Section */}
+                    {account ? (
+                      <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center space-x-2">
+                            <Wallet size={18} className="text-green-600" />
+                            <span className="text-sm font-semibold text-green-900">MetaMask Connected</span>
+                          </div>
+                          <button
+                            onClick={disconnectWallet}
+                            className="text-xs text-red-600 hover:text-red-800 font-semibold"
+                          >
+                            Disconnect
+                          </button>
+                        </div>
+                        <p className="text-xs text-gray-600">
+                          {account.slice(0, 6)}...{account.slice(-4)}
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                        <div className="flex items-center space-x-2 mb-2">
+                          <Wallet size={18} className="text-yellow-600" />
+                          <span className="text-sm font-semibold text-yellow-900">Wallet Not Connected</span>
+                        </div>
+                        <p className="text-xs text-gray-600 mb-3">
+                          Connect your MetaMask wallet to proceed with checkout
+                        </p>
+                        <button
+                          onClick={connectWallet}
+                          className="w-full py-2 bg-yellow-600 text-white rounded-lg font-semibold hover:bg-yellow-700 transition text-sm"
+                        >
+                          Connect MetaMask
+                        </button>
+                      </div>
+                    )}
+                    
                     <button
                       onClick={handleCheckout}
-                      className="w-full py-4 bg-green-600 text-white rounded-xl font-bold text-lg hover:bg-green-700 transition-colors flex items-center justify-center space-x-2"
+                      disabled={!account}
+                      className="w-full py-4 bg-green-600 text-white rounded-xl font-bold text-lg hover:bg-green-700 transition-colors flex items-center justify-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <Wallet size={24} />
-                      <span>{account ? 'Checkout with MetaMask' : 'Connect MetaMask'}</span>
+                      <span>Checkout with MetaMask</span>
                     </button>
-
-                    {account && (
-                      <p className="text-xs text-gray-600 mt-2 text-center">
-                        Connected: {account.slice(0, 6)}...{account.slice(-4)}
-                      </p>
-                    )}
                   </div>
                 </>
               )}
@@ -744,7 +841,17 @@ export default function CustomerProductsPage() {
       {showAddressModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-2xl w-full p-8 max-h-[90vh] overflow-y-auto">
-            <h2 className="text-2xl font-bold text-gray-900 mb-6">Delivery Address</h2>
+            <h2 className="text-2xl font-bold text-gray-900 mb-4">Delivery Address</h2>
+            
+            {/* Use Current Location Button */}
+            <button
+              onClick={getCurrentLocation}
+              disabled={loadingLocation}
+              className="w-full mb-6 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition flex items-center justify-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <MapPin size={20} />
+              <span>{loadingLocation ? 'Getting Location...' : '📍 Use Current Location'}</span>
+            </button>
             
             <div className="space-y-4">
               <div className="grid md:grid-cols-2 gap-4">
