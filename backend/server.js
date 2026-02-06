@@ -995,8 +995,8 @@ apiRouter.post('/delivery/orders/:orderId/generate-otp', authenticateToken, asyn
       return res.status(404).json({ message: 'Order not found or not assigned to you' });
     }
 
-    if (order.status !== 'out_for_delivery') {
-      return res.status(400).json({ message: 'OTP can only be generated when order is out for delivery' });
+    if (order.status !== 'near_location') {
+      return res.status(400).json({ message: 'OTP can only be generated when order is near location' });
     }
 
     const deliveryOTP = Math.floor(100000 + Math.random() * 900000).toString();
@@ -1026,6 +1026,10 @@ apiRouter.post('/delivery/orders/:orderId/verify-otp', authenticateToken, async 
     const { orderId } = req.params;
     const { otp } = req.body;
 
+    if (!otp || otp.length !== 6) {
+      return res.status(400).json({ message: 'Valid 6-digit OTP is required' });
+    }
+
     const order = await Order.findOne({ 
       _id: orderId, 
       deliveryPartner: req.user.userId 
@@ -1043,8 +1047,11 @@ apiRouter.post('/delivery/orders/:orderId/verify-otp', authenticateToken, async 
       return res.status(400).json({ message: 'Invalid OTP' });
     }
 
+    // Update order status to delivered
     order.status = 'delivered';
     order.deliveredAt = new Date();
+    
+    // Add delivery verification to tracking history
     order.trackingHistory.push({
       status: 'delivered',
       message: 'Order delivered successfully and verified with OTP',
@@ -1065,7 +1072,7 @@ apiRouter.post('/delivery/orders/:orderId/verify-otp', authenticateToken, async 
     });
   } catch (error) {
     console.error('❌ Error verifying OTP:', error);
-    res.status(500).json({ message: 'Failed to verify OTP' });
+    res.status(500).json({ message: 'Failed to verify OTP', error: error.message });
   }
 });
 
@@ -1330,6 +1337,10 @@ apiRouter.put('/delivery/orders/:orderId/status', authenticateToken, async (req,
     const { orderId } = req.params;
     const { status } = req.body;
 
+    if (!status) {
+      return res.status(400).json({ message: 'Status is required' });
+    }
+
     const order = await Order.findOne({ 
       _id: orderId, 
       deliveryPartner: req.user.userId 
@@ -1339,21 +1350,29 @@ apiRouter.put('/delivery/orders/:orderId/status', authenticateToken, async (req,
       return res.status(404).json({ message: 'Order not found or not assigned to you' });
     }
 
+    // Updated valid transitions
     const validTransitions = {
       'confirmed': ['out_for_delivery'],
-      'out_for_delivery': ['near_location', 'delivered'],
-      'near_location': ['delivered']
+      'out_for_delivery': ['near_location'],
+      'near_location': ['delivered'] // Can only go to delivered from near_location
     };
 
-    if (!validTransitions[order.status]?.includes(status)) {
-      return res.status(400).json({ message: 'Invalid status transition' });
+    const allowedTransitions = validTransitions[order.status];
+    
+    if (!allowedTransitions || !allowedTransitions.includes(status)) {
+      return res.status(400).json({ 
+        message: `Invalid status transition from ${order.status} to ${status}`,
+        currentStatus: order.status,
+        allowedTransitions: allowedTransitions || []
+      });
     }
 
+    // Update order status
     order.status = status;
     
     const statusMessages = {
       'out_for_delivery': 'Package is out for delivery',
-      'near_location': 'Delivery partner is near your location',
+      'near_location': 'Delivery partner is near your location - OTP will be generated for verification',
       'delivered': 'Package has been delivered'
     };
 
@@ -1362,23 +1381,32 @@ apiRouter.put('/delivery/orders/:orderId/status', authenticateToken, async (req,
       message: statusMessages[status] || `Status updated to ${status}`,
       timestamp: new Date(),
       deliveryPartner: {
-        name: order.deliveryPartner.name,
-        phone: order.deliveryPartner.email
+        name: order.deliveryPartner?.name || req.user.name,
+        phone: order.deliveryPartner?.email || req.user.email
       }
     });
 
-    if (status === 'delivered') {
-      order.deliveredAt = new Date();
+    // Clear OTP when moving to near_location (will generate fresh OTP)
+    if (status === 'near_location') {
+      order.deliveryOTP = null;
     }
 
     await order.save();
 
     console.log(`✅ Order ${order.orderNumber} status updated to ${status}`);
 
-    res.json({ message: 'Order status updated successfully', order });
+    res.json({ 
+      message: 'Order status updated successfully', 
+      order,
+      // Only return OTP if generated separately
+      deliveryOTP: undefined
+    });
   } catch (error) {
     console.error('❌ Error updating order status:', error);
-    res.status(500).json({ message: 'Failed to update order status' });
+    res.status(500).json({ 
+      message: 'Failed to update order status',
+      error: error.message 
+    });
   }
 });
 
