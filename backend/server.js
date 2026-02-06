@@ -12,7 +12,6 @@ const app = express();
 
 /* ===================== MIDDLEWARE ===================== */
 
-// Request logging middleware
 app.use((req, res, next) => {
   console.log(`🌐 ${req.method} ${req.originalUrl} from ${req.ip}`);
   next();
@@ -236,7 +235,6 @@ const manufacturedProductSchema = new mongoose.Schema({
 
 const ManufacturedProduct = mongoose.model('ManufacturedProduct', manufacturedProductSchema);
 
-// NEW: Order Schema for complete order management
 const orderSchema = new mongoose.Schema({
   orderNumber: { type: String, required: true, unique: true },
   customer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
@@ -259,7 +257,7 @@ const orderSchema = new mongoose.Schema({
     state: { type: String, required: true },
     pincode: { type: String, required: true }
   },
-  deliveryOTP: { type: String, required: true },
+  deliveryOTP: { type: String, default: null },
   deliveryPartner: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   assignedAt: { type: Date, default: null },
   deliveredAt: { type: Date, default: null },
@@ -272,12 +270,13 @@ const orderSchema = new mongoose.Schema({
       phone: String
     }
   }],
-  feedback: {
-    rating: { type: Number, min: 1, max: 5 },
-    comment: { type: String },
-    submitted: { type: Boolean, default: false },
-    submittedAt: { type: Date }
-  },
+  feedback: [{
+    productId: { type: mongoose.Schema.Types.ObjectId, ref: 'ManufacturedProduct', required: true },
+    rating: { type: Number, min: 1, max: 5, required: true },
+    comment: { type: String, default: '' },
+    customerName: { type: String, required: true },
+    submittedAt: { type: Date, default: Date.now }
+  }],
   returnRequest: {
     requested: { type: Boolean, default: false },
     reason: { type: String },
@@ -293,12 +292,7 @@ const orderSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 });
 
-// Generate random 4-digit OTP and order number
 orderSchema.pre('save', function(next) {
-  if (this.isNew && !this.deliveryOTP) {
-    this.deliveryOTP = Math.floor(1000 + Math.random() * 9000).toString();
-  }
-  
   if (this.isNew && !this.orderNumber) {
     this.orderNumber = 'ORD' + Date.now() + Math.floor(Math.random() * 1000);
   }
@@ -308,6 +302,35 @@ orderSchema.pre('save', function(next) {
 });
 
 const Order = mongoose.model('Order', orderSchema);
+
+const productReviewSchema = new mongoose.Schema({
+  productId: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'ManufacturedProduct', 
+    required: true 
+  },
+  orderId: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'Order', 
+    required: true 
+  },
+  customerId: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'User', 
+    required: true 
+  },
+  customerName: { type: String, required: true },
+  rating: { 
+    type: Number, 
+    required: true, 
+    min: 1, 
+    max: 5 
+  },
+  comment: { type: String, default: '' },
+  createdAt: { type: Date, default: Date.now }
+});
+
+const ProductReview = mongoose.model('ProductReview', productReviewSchema);
 
 /* ===================== AUTHENTICATION MIDDLEWARE ===================== */
 
@@ -550,7 +573,6 @@ apiRouter.get('/products/available', authenticateToken, async (req, res) => {
   }
 });
 
-// Alias route for /products/mine - same as /supplier/products
 apiRouter.get('/products/mine', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'suppliers') {
@@ -569,14 +591,12 @@ apiRouter.get('/products/mine', authenticateToken, async (req, res) => {
   }
 });
 
-// Get payment receipts for supplier (transactions where they sold materials)
 apiRouter.get('/supplier/receipts', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'suppliers') {
       return res.status(403).json({ message: 'Access denied' });
     }
 
-    // Find all transactions where this supplier was the seller
     const receipts = await Transaction.find({ sellerId: req.user.userId })
       .populate('buyerId', 'name email company')
       .populate('productId', 'name image')
@@ -591,7 +611,6 @@ apiRouter.get('/supplier/receipts', authenticateToken, async (req, res) => {
   }
 });
 
-// Get single receipt details
 apiRouter.get('/supplier/receipts/:receiptId', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'suppliers') {
@@ -620,14 +639,12 @@ apiRouter.get('/supplier/receipts/:receiptId', authenticateToken, async (req, re
   }
 });
 
-// Get materials that were purchased FROM this supplier (materials sold by supplier)
 apiRouter.get('/supplier/purchased-materials', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'suppliers') {
       return res.status(403).json({ message: 'Access denied' });
     }
 
-    // Find all materials where this supplier was the seller (supplierId matches)
     const soldMaterials = await PurchasedMaterial.find({ 
       supplierId: req.user.userId 
     })
@@ -642,7 +659,6 @@ apiRouter.get('/supplier/purchased-materials', authenticateToken, async (req, re
     res.status(500).json({ message: 'Server error' });
   }
 });
-
 
 /* ===================== MANUFACTURER ROUTES ===================== */
 
@@ -868,9 +884,8 @@ apiRouter.get('/products/:productId/detail', authenticateToken, async (req, res)
   }
 });
 
-/* ===================== ORDER ROUTES (NEW) ===================== */
+/* ===================== ORDER ROUTES ===================== */
 
-// Create Order (Customer Checkout)
 apiRouter.post('/orders/create', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'customers') {
@@ -889,19 +904,14 @@ apiRouter.post('/orders/create', authenticateToken, async (req, res) => {
       return res.status(400).json({ message: 'Complete delivery address is required' });
     }
 
-    // Generate unique order number
     const orderNumber = `ORD-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
     
-    // Generate 6-digit OTP for delivery verification
-    const deliveryOTP = Math.floor(100000 + Math.random() * 900000).toString();
-
     const order = new Order({
       orderNumber,
       customer: req.user.userId,
       items,
       totalAmount,
       deliveryAddress,
-      deliveryOTP,
       paymentDetails,
       trackingHistory: [{
         status: 'pending',
@@ -912,7 +922,6 @@ apiRouter.post('/orders/create', authenticateToken, async (req, res) => {
 
     await order.save();
 
-    // Update product quantities
     for (const item of items) {
       await ManufacturedProduct.findByIdAndUpdate(
         item.product,
@@ -925,8 +934,7 @@ apiRouter.post('/orders/create', authenticateToken, async (req, res) => {
     res.status(201).json({
       message: 'Order created successfully',
       order,
-      orderNumber: order.orderNumber,
-      deliveryOTP: order.deliveryOTP
+      orderNumber: order.orderNumber
     });
   } catch (error) {
     console.error('❌ Error creating order:', error);
@@ -934,7 +942,6 @@ apiRouter.post('/orders/create', authenticateToken, async (req, res) => {
   }
 });
 
-// Get Customer Orders
 apiRouter.get('/customer/orders', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'customers') {
@@ -952,14 +959,13 @@ apiRouter.get('/customer/orders', authenticateToken, async (req, res) => {
     res.status(500).json({ message: 'Failed to fetch orders' });
   }
 });
-// Get Customer Purchase History (for blockchain tracking)
+
 apiRouter.get('/customer/purchases', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'customers') {
       return res.status(403).json({ message: 'Access denied' });
     }
 
-    // Get all orders for the customer with populated product details
     const orders = await Order.find({ customer: req.user.userId })
       .populate('items.product')
       .populate('deliveryPartner', 'name email company')
@@ -972,19 +978,65 @@ apiRouter.get('/customer/purchases', authenticateToken, async (req, res) => {
   }
 });
 
-// Verify OTP and Confirm Delivery (Customer)
-apiRouter.post('/orders/:orderId/verify-otp', authenticateToken, async (req, res) => {
+apiRouter.post('/delivery/orders/:orderId/generate-otp', authenticateToken, async (req, res) => {
   try {
+    if (req.user.role !== 'delivery_partner') {
+      return res.status(403).json({ message: 'Access denied. Delivery partners only.' });
+    }
+
+    const { orderId } = req.params;
+
+    const order = await Order.findOne({ 
+      _id: orderId, 
+      deliveryPartner: req.user.userId 
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found or not assigned to you' });
+    }
+
+    if (order.status !== 'out_for_delivery') {
+      return res.status(400).json({ message: 'OTP can only be generated when order is out for delivery' });
+    }
+
+    const deliveryOTP = Math.floor(100000 + Math.random() * 900000).toString();
+    order.deliveryOTP = deliveryOTP;
+
+    await order.save();
+
+    console.log(`✅ OTP generated for order ${order.orderNumber}: ${deliveryOTP}`);
+
+    res.json({ 
+      message: 'OTP generated successfully',
+      deliveryOTP,
+      order 
+    });
+  } catch (error) {
+    console.error('❌ Error generating OTP:', error);
+    res.status(500).json({ message: 'Failed to generate OTP' });
+  }
+});
+
+apiRouter.post('/delivery/orders/:orderId/verify-otp', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'delivery_partner') {
+      return res.status(403).json({ message: 'Access denied. Delivery partners only.' });
+    }
+
     const { orderId } = req.params;
     const { otp } = req.body;
 
     const order = await Order.findOne({ 
       _id: orderId, 
-      customer: req.user.userId 
+      deliveryPartner: req.user.userId 
     });
 
     if (!order) {
-      return res.status(404).json({ message: 'Order not found' });
+      return res.status(404).json({ message: 'Order not found or not assigned to you' });
+    }
+
+    if (!order.deliveryOTP) {
+      return res.status(400).json({ message: 'OTP not generated yet. Please generate OTP first.' });
     }
 
     if (order.deliveryOTP !== otp) {
@@ -995,25 +1047,31 @@ apiRouter.post('/orders/:orderId/verify-otp', authenticateToken, async (req, res
     order.deliveredAt = new Date();
     order.trackingHistory.push({
       status: 'delivered',
-      message: 'Order delivered successfully and verified by customer',
-      timestamp: new Date()
+      message: 'Order delivered successfully and verified with OTP',
+      timestamp: new Date(),
+      deliveryPartner: {
+        name: req.user.name,
+        phone: req.user.email
+      }
     });
 
     await order.save();
 
-    console.log(`✅ Order ${order.orderNumber} delivered and verified`);
+    console.log(`✅ Order ${order.orderNumber} delivered with OTP verification`);
 
-    res.json({ message: 'Delivery verified successfully', order });
+    res.json({ 
+      message: 'Delivery verified successfully with OTP', 
+      order 
+    });
   } catch (error) {
     console.error('❌ Error verifying OTP:', error);
     res.status(500).json({ message: 'Failed to verify OTP' });
   }
 });
 
-// Submit Feedback (Customer)
-apiRouter.post('/orders/:orderId/feedback', authenticateToken, async (req, res) => {
+apiRouter.post('/orders/:orderId/feedback/:productId', authenticateToken, async (req, res) => {
   try {
-    const { orderId } = req.params;
+    const { orderId, productId } = req.params;
     const { rating, comment } = req.body;
 
     const order = await Order.findOne({ 
@@ -1029,79 +1087,113 @@ apiRouter.post('/orders/:orderId/feedback', authenticateToken, async (req, res) 
       return res.status(400).json({ message: 'Can only submit feedback for delivered orders' });
     }
 
-    order.feedback = {
+    const orderItem = order.items.find(item => item.product.toString() === productId);
+    if (!orderItem) {
+      return res.status(400).json({ message: 'Product not found in this order' });
+    }
+
+    const existingFeedback = order.feedback.find(f => f.productId.toString() === productId);
+    if (existingFeedback) {
+      return res.status(400).json({ message: 'Feedback already submitted for this product' });
+    }
+
+    const customer = await User.findById(req.user.userId);
+
+    order.feedback.push({
+      productId,
       rating,
       comment,
-      submitted: true,
+      customerName: customer.name,
       submittedAt: new Date()
-    };
+    });
 
     await order.save();
 
-    console.log(`✅ Feedback submitted for order ${order.orderNumber}`);
+    const productReview = new ProductReview({
+      productId,
+      orderId,
+      customerId: req.user.userId,
+      customerName: customer.name,
+      rating,
+      comment
+    });
 
-    res.json({ message: 'Feedback submitted successfully', order });
+    await productReview.save();
+
+    console.log(`✅ Feedback submitted for product ${productId} in order ${order.orderNumber}`);
+
+    res.json({ 
+      message: 'Feedback submitted successfully', 
+      feedback: {
+        productId,
+        rating,
+        comment,
+        customerName: customer.name
+      }
+    });
   } catch (error) {
     console.error('❌ Error submitting feedback:', error);
     res.status(500).json({ message: 'Failed to submit feedback' });
   }
 });
 
-// Request Return (Customer)
-apiRouter.post('/orders/:orderId/return', authenticateToken, async (req, res) => {
+apiRouter.get('/products/:productId/reviews', authenticateToken, async (req, res) => {
+  try {
+    const { productId } = req.params;
+
+    const reviews = await ProductReview.find({ productId })
+      .sort({ createdAt: -1 })
+      .limit(50);
+
+    const averageRating = reviews.length > 0 
+      ? reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length 
+      : 0;
+
+    res.json({
+      reviews,
+      averageRating: averageRating.toFixed(1),
+      totalReviews: reviews.length
+    });
+  } catch (error) {
+    console.error('❌ Error fetching product reviews:', error);
+    res.status(500).json({ message: 'Failed to fetch reviews' });
+  }
+});
+
+apiRouter.get('/orders/:orderId/feedback', authenticateToken, async (req, res) => {
   try {
     const { orderId } = req.params;
-    const { reason } = req.body;
 
     const order = await Order.findOne({ 
       _id: orderId, 
       customer: req.user.userId 
-    });
+    }).select('feedback items');
 
     if (!order) {
       return res.status(404).json({ message: 'Order not found' });
     }
 
-    if (order.status !== 'delivered') {
-      return res.status(400).json({ message: 'Can only return delivered orders' });
-    }
+    const reviewedProductIds = order.feedback?.map(f => f.productId?.toString()) || [];
+    const unreviewedProducts = order.items
+      .filter(item => !reviewedProductIds.includes(item.product?.toString()))
+      .map(item => ({
+        productId: item.product,
+        productName: item.product?.name || 'Product'
+      }));
 
-    // Check if within 14 days
-    const deliveredDate = new Date(order.deliveredAt);
-    const currentDate = new Date();
-    const daysDiff = Math.floor((currentDate - deliveredDate) / (1000 * 60 * 60 * 24));
-    
-    if (daysDiff > 14) {
-      return res.status(400).json({ message: 'Return period has expired (14 days)' });
-    }
-
-    order.returnRequest = {
-      requested: true,
-      reason,
-      requestedAt: new Date(),
-      status: 'pending'
-    };
-
-    order.trackingHistory.push({
-      status: 'return_requested',
-      message: `Return requested: ${reason}`,
-      timestamp: new Date()
+    res.json({
+      submittedFeedback: order.feedback,
+      unreviewedProducts,
+      canSubmitFeedback: unreviewedProducts.length > 0 && order.status === 'delivered'
     });
-
-    await order.save();
-
-    console.log(`✅ Return requested for order ${order.orderNumber}`);
-
-    res.json({ message: 'Return request submitted successfully', order });
   } catch (error) {
-    console.error('❌ Error requesting return:', error);
-    res.status(500).json({ message: 'Failed to submit return request' });
+    console.error('❌ Error fetching feedback:', error);
+    res.status(500).json({ message: 'Failed to fetch feedback' });
   }
 });
 
-/* ===================== DELIVERY PARTNER ROUTES (NEW) ===================== */
+/* ===================== DELIVERY PARTNER ROUTES ===================== */
 
-// Get Delivery Assignments
 apiRouter.get('/delivery/assignments', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'delivery_partner') {
@@ -1121,14 +1213,13 @@ apiRouter.get('/delivery/assignments', authenticateToken, async (req, res) => {
     res.status(500).json({ message: 'Failed to fetch assignments' });
   }
 });
-// Get All Pending Orders (for delivery partners to see available assignments)
+
 apiRouter.get('/delivery/pending-orders', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'delivery_partner') {
       return res.status(403).json({ message: 'Access denied. Delivery partners only.' });
     }
 
-    // Find orders that are pending and not yet assigned to any delivery partner
     const pendingOrders = await Order.find({ 
       status: 'pending',
       deliveryPartner: null
@@ -1144,7 +1235,6 @@ apiRouter.get('/delivery/pending-orders', authenticateToken, async (req, res) =>
   }
 });
 
-// Get Delivery Stats
 apiRouter.get('/delivery/stats', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'delivery_partner') {
@@ -1177,8 +1267,6 @@ apiRouter.get('/delivery/stats', authenticateToken, async (req, res) => {
   }
 });
 
-
-// Self-assign to a pending order (Delivery Partner)
 apiRouter.post('/delivery/self-assign/:orderId', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'delivery_partner') {
@@ -1200,13 +1288,11 @@ apiRouter.post('/delivery/self-assign/:orderId', authenticateToken, async (req, 
       return res.status(400).json({ message: 'Order is not available for assignment' });
     }
 
-    // Get delivery partner details
     const deliveryPartner = await User.findById(req.user.userId);
     if (!deliveryPartner) {
       return res.status(404).json({ message: 'Delivery partner not found' });
     }
 
-    // Assign the order
     order.deliveryPartner = req.user.userId;
     order.assignedAt = new Date();
     order.status = 'confirmed';
@@ -1235,7 +1321,6 @@ apiRouter.post('/delivery/self-assign/:orderId', authenticateToken, async (req, 
   }
 });
 
-// Update Order Status (Delivery Partner)
 apiRouter.put('/delivery/orders/:orderId/status', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'delivery_partner') {
@@ -1294,6 +1379,56 @@ apiRouter.put('/delivery/orders/:orderId/status', authenticateToken, async (req,
   } catch (error) {
     console.error('❌ Error updating order status:', error);
     res.status(500).json({ message: 'Failed to update order status' });
+  }
+});
+
+apiRouter.post('/orders/:orderId/return', authenticateToken, async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { reason } = req.body;
+
+    const order = await Order.findOne({ 
+      _id: orderId, 
+      customer: req.user.userId 
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    if (order.status !== 'delivered') {
+      return res.status(400).json({ message: 'Can only return delivered orders' });
+    }
+
+    const deliveredDate = new Date(order.deliveredAt);
+    const currentDate = new Date();
+    const daysDiff = Math.floor((currentDate - deliveredDate) / (1000 * 60 * 60 * 24));
+    
+    if (daysDiff > 14) {
+      return res.status(400).json({ message: 'Return period has expired (14 days)' });
+    }
+
+    order.returnRequest = {
+      requested: true,
+      reason,
+      requestedAt: new Date(),
+      status: 'pending'
+    };
+
+    order.trackingHistory.push({
+      status: 'return_requested',
+      message: `Return requested: ${reason}`,
+      timestamp: new Date()
+    });
+
+    await order.save();
+
+    console.log(`✅ Return requested for order ${order.orderNumber}`);
+
+    res.json({ message: 'Return request submitted successfully', order });
+  } catch (error) {
+    console.error('❌ Error requesting return:', error);
+    res.status(500).json({ message: 'Failed to submit return request' });
   }
 });
 
@@ -1369,7 +1504,6 @@ apiRouter.get('/admin/transactions', authenticateToken, async (req, res) => {
   }
 });
 
-// Get All Orders (Admin)
 apiRouter.get('/admin/orders', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'admin') {
@@ -1389,7 +1523,6 @@ apiRouter.get('/admin/orders', authenticateToken, async (req, res) => {
   }
 });
 
-// Assign Delivery Partner (Admin)
 apiRouter.put('/admin/orders/:orderId/assign', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'admin') {
@@ -1438,7 +1571,6 @@ apiRouter.put('/admin/orders/:orderId/assign', authenticateToken, async (req, re
   }
 });
 
-// Get All Delivery Partners (Admin)
 apiRouter.get('/admin/delivery-partners', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'admin') {
@@ -1486,7 +1618,6 @@ apiRouter.put('/admin/users/:userId/status', authenticateToken, async (req, res)
 
 /* ===================== MANUFACTURER ROUTES ===================== */
 
-// Buy raw materials (Manufacturer purchases from Supplier)
 apiRouter.post('/products/buy-raw', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'manufacturers') {
@@ -1499,29 +1630,24 @@ apiRouter.post('/products/buy-raw', authenticateToken, async (req, res) => {
       return res.status(400).json({ message: 'Invalid purchase data' });
     }
 
-    // Find the original product (raw material from supplier)
     const product = await Product.findById(productId).populate('supplierId');
     if (!product) {
       return res.status(404).json({ message: 'Product not found' });
     }
 
-    // Check if enough quantity is available
     if (product.quantity < quantity) {
       return res.status(400).json({ 
         message: `Not enough stock. Available: ${product.quantity}` 
       });
     }
 
-    // Calculate total amount
     const totalAmount = product.price * quantity;
 
-    // Get manufacturer details
     const manufacturer = await User.findById(req.user.userId);
     if (!manufacturer) {
       return res.status(404).json({ message: 'Manufacturer not found' });
     }
 
-    // Create purchased material record
     const purchasedMaterial = new PurchasedMaterial({
       productId: product._id,
       originalProductId: product._id,
@@ -1541,7 +1667,6 @@ apiRouter.post('/products/buy-raw', authenticateToken, async (req, res) => {
 
     await purchasedMaterial.save();
 
-    // Create transaction record
     const transaction = new Transaction({
       productId: product._id,
       productName: product.name,
@@ -1558,7 +1683,6 @@ apiRouter.post('/products/buy-raw', authenticateToken, async (req, res) => {
 
     await transaction.save();
 
-    // Update product quantity
     product.quantity -= quantity;
     await product.save();
 
@@ -1580,7 +1704,6 @@ apiRouter.post('/products/buy-raw', authenticateToken, async (req, res) => {
   }
 });
 
-// Get manufacturer's purchase history
 apiRouter.get('/manufacturer/purchases', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'manufacturers') {
@@ -1600,7 +1723,6 @@ apiRouter.get('/manufacturer/purchases', authenticateToken, async (req, res) => 
   }
 });
 
-// Get manufacturer's bought materials (available for manufacturing)
 apiRouter.get('/manufacturer/bought-materials', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'manufacturers') {
@@ -1622,28 +1744,6 @@ apiRouter.get('/manufacturer/bought-materials', authenticateToken, async (req, r
   }
 });
 
-// Get manufacturer's manufactured products
-apiRouter.get('/manufacturer/products', authenticateToken, async (req, res) => {
-  try {
-    if (req.user.role !== 'manufacturers') {
-      return res.status(403).json({ message: 'Access denied. Manufacturers only.' });
-    }
-
-    const products = await ManufacturedProduct.find({ 
-      manufacturerId: req.user.userId 
-    })
-      .populate('rawMaterials.materialId')
-      .sort({ createdAt: -1 });
-
-    res.json(products);
-
-  } catch (err) {
-    console.error('❌ Error fetching manufactured products:', err);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// Create a new manufactured product from raw materials
 apiRouter.post('/manufacturer/create-product', authenticateToken, upload.single('image'), async (req, res) => {
   try {
     if (req.user.role !== 'manufacturers') {
@@ -1660,7 +1760,6 @@ apiRouter.post('/manufacturer/create-product', authenticateToken, upload.single(
       return res.status(400).json({ message: 'Product image is required' });
     }
 
-    // Find the material being used
     const material = await PurchasedMaterial.findById(materialId);
     if (!material) {
       return res.status(404).json({ message: 'Material not found' });
@@ -1674,13 +1773,11 @@ apiRouter.post('/manufacturer/create-product', authenticateToken, upload.single(
       return res.status(400).json({ message: 'Material has already been used' });
     }
 
-    // Get manufacturer details
     const manufacturer = await User.findById(req.user.userId);
     if (!manufacturer) {
       return res.status(404).json({ message: 'Manufacturer not found' });
     }
 
-    // Create manufactured product
     const manufacturedProduct = new ManufacturedProduct({
       name,
       description,
@@ -1700,7 +1797,6 @@ apiRouter.post('/manufacturer/create-product', authenticateToken, upload.single(
 
     await manufacturedProduct.save();
 
-    // Mark material as used
     material.status = 'used';
     await material.save();
 
@@ -1720,7 +1816,6 @@ apiRouter.post('/manufacturer/create-product', authenticateToken, upload.single(
   }
 });
 
-// Create a manufactured product by combining multiple raw materials
 apiRouter.post('/manufacturer/manufacture-combined', authenticateToken, upload.single('image'), async (req, res) => {
   try {
     if (req.user.role !== 'manufacturers') {
@@ -1737,7 +1832,6 @@ apiRouter.post('/manufacturer/manufacture-combined', authenticateToken, upload.s
       return res.status(400).json({ message: 'Product image is required' });
     }
 
-    // Parse materialIds from JSON string
     let parsedMaterialIds;
     try {
       parsedMaterialIds = JSON.parse(materialIds);
@@ -1749,13 +1843,11 @@ apiRouter.post('/manufacturer/manufacture-combined', authenticateToken, upload.s
       return res.status(400).json({ message: 'Please select 2-3 materials to combine' });
     }
 
-    // Get manufacturer details
     const manufacturer = await User.findById(req.user.userId);
     if (!manufacturer) {
       return res.status(404).json({ message: 'Manufacturer not found' });
     }
 
-    // Find all materials and validate ownership and availability
     const materials = await PurchasedMaterial.find({ 
       _id: { $in: parsedMaterialIds } 
     });
@@ -1764,7 +1856,6 @@ apiRouter.post('/manufacturer/manufacture-combined', authenticateToken, upload.s
       return res.status(404).json({ message: 'One or more materials not found' });
     }
 
-    // Validate all materials
     for (const material of materials) {
       if (material.manufacturerId.toString() !== req.user.userId) {
         return res.status(403).json({ 
@@ -1779,14 +1870,12 @@ apiRouter.post('/manufacturer/manufacture-combined', authenticateToken, upload.s
       }
     }
 
-    // Create the raw materials array for the manufactured product
     const rawMaterialsArray = materials.map(material => ({
       materialId: material._id,
       materialName: material.productName,
       quantity: material.quantity
     }));
 
-    // Create manufactured product
     const manufacturedProduct = new ManufacturedProduct({
       name,
       description,
@@ -1802,7 +1891,6 @@ apiRouter.post('/manufacturer/manufacture-combined', authenticateToken, upload.s
 
     await manufacturedProduct.save();
 
-    // Mark all materials as used
     await PurchasedMaterial.updateMany(
       { _id: { $in: parsedMaterialIds } },
       { $set: { status: 'used' } }
@@ -1882,7 +1970,6 @@ app.get('/health', (req, res) => {
 
 /* ===================== ERROR HANDLING ===================== */
 
-// Catch-all for undefined routes
 app.use('*', (req, res) => {
   console.log(`❌ Route not found: ${req.method} ${req.originalUrl}`);
   res.status(404).json({
@@ -1893,7 +1980,6 @@ app.use('*', (req, res) => {
   });
 });
 
-// Global error handler
 app.use((err, req, res, next) => {
   console.error('❌ Server error:', err.stack);
   res.status(500).json({

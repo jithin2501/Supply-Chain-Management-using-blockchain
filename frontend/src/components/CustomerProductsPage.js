@@ -21,14 +21,12 @@ export default function CustomerProductsPage() {
   const [showCheckout, setShowCheckout] = useState(false);
   const [showAddressModal, setShowAddressModal] = useState(false);
   
-  // MetaMask & Transaction states
   const [account, setAccount] = useState(null);
   const [isMetaMaskInstalled, setIsMetaMaskInstalled] = useState(false);
   const [txStatus, setTxStatus] = useState(null);
   const [txStep, setTxStep] = useState(0);
   const [loadingLocation, setLoadingLocation] = useState(false);
 
-  // Delivery Address
   const [deliveryAddress, setDeliveryAddress] = useState({
     name: '',
     phone: '',
@@ -36,6 +34,12 @@ export default function CustomerProductsPage() {
     city: '',
     state: '',
     pincode: ''
+  });
+
+  const [productReviews, setProductReviews] = useState({
+    reviews: [],
+    averageRating: 0,
+    totalReviews: 0
   });
 
   const token = localStorage.getItem('token');
@@ -48,7 +52,6 @@ export default function CustomerProductsPage() {
     { title: "Finalizing Purchase", icon: CheckCircle2 }
   ];
 
-  // Load cart from localStorage on mount
   useEffect(() => {
     const savedCart = localStorage.getItem(`cart_${user._id}`);
     if (savedCart) {
@@ -56,7 +59,6 @@ export default function CustomerProductsPage() {
     }
   }, [user._id]);
 
-  // Save cart to localStorage whenever it changes
   useEffect(() => {
     if (cart.length > 0) {
       localStorage.setItem(`cart_${user._id}`, JSON.stringify(cart));
@@ -65,7 +67,6 @@ export default function CustomerProductsPage() {
     }
   }, [cart, user._id]);
 
-  // Check for MetaMask
   useEffect(() => {
     if (window.ethereum) {
       setIsMetaMaskInstalled(true);
@@ -118,7 +119,13 @@ export default function CustomerProductsPage() {
 
   useEffect(() => {
     fetchProducts();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (selectedProduct && showDetailModal) {
+      fetchProductReviews(selectedProduct._id);
+    }
+  }, [selectedProduct, showDetailModal]);
 
   const fetchProducts = async () => {
     try {
@@ -154,6 +161,21 @@ export default function CustomerProductsPage() {
     } catch (error) {
       console.error('Error fetching product detail:', error);
       alert('Failed to load product details');
+    }
+  };
+
+  const fetchProductReviews = async (productId) => {
+    try {
+      const response = await fetch(`${API_URL}/products/${productId}/reviews`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      if (!response.ok) throw new Error('Failed to fetch reviews');
+      
+      const data = await response.json();
+      setProductReviews(data);
+    } catch (error) {
+      console.error('Error fetching product reviews:', error);
     }
   };
 
@@ -223,7 +245,6 @@ export default function CustomerProductsPage() {
     localStorage.removeItem(`wallet_${user._id}`);
   };
 
-
   const getCurrentLocation = () => {
     if (!navigator.geolocation) {
       alert('Geolocation is not supported by your browser');
@@ -236,13 +257,11 @@ export default function CustomerProductsPage() {
         const { latitude, longitude } = position.coords;
         
         try {
-          // Use reverse geocoding to get address
           const response = await fetch(
             `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`
           );
           const data = await response.json();
           
-          // Extract address components
           const address = data.address || {};
           
           setDeliveryAddress(prev => ({
@@ -282,19 +301,18 @@ export default function CustomerProductsPage() {
       }
     );
   };
+
   const handleCheckout = async () => {
     if (!account) {
       await connectWallet();
       return;
     }
 
-    // Show address modal first
     setShowCart(false);
     setShowAddressModal(true);
   };
 
   const proceedToPayment = () => {
-    // Validate address
     if (!deliveryAddress.name || !deliveryAddress.phone || !deliveryAddress.street || 
         !deliveryAddress.city || !deliveryAddress.state || !deliveryAddress.pincode) {
       alert('Please fill in all delivery address fields');
@@ -313,7 +331,6 @@ export default function CustomerProductsPage() {
     try {
       setTxStep(1);
       
-      // Check if we have permission to access accounts
       const accounts = await window.ethereum.request({ method: 'eth_accounts' });
       if (accounts.length === 0) {
         await connectWallet();
@@ -328,29 +345,24 @@ export default function CustomerProductsPage() {
         localStorage.setItem(`wallet_${user._id}`, currentAccount);
       }
 
-      // Check which network we're on
       const chainId = await window.ethereum.request({ method: 'eth_chainId' });
       console.log('🌐 Current network chainId:', chainId);
       
-      // Convert total price to ETH (₹1 = 0.000002 ETH - adjust as needed)
       const totalAmount = getTotalPrice();
       const ethAmount = (totalAmount * 0.000002).toFixed(6);
       const weiAmount = Math.floor(parseFloat(ethAmount) * 1e18);
 
       setTxStep(2);
       
-      // Prepare blockchain transaction
-      const transactionParameters = {
-        to: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8', // Platform wallet address
-        from: currentAccount,
-        // eslint-disable-next-line no-undef
-        value: '0x' + BigInt(weiAmount).toString(16),
-        gas: '0x5208', // 21000 gas for simple transfer
-      };
+const transactionParameters = {
+  to: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
+  from: currentAccount,
+  value: '0x' + weiAmount.toString(16), // Remove BigInt
+  gas: '0x5208',
+};
 
       console.log('📤 Sending transaction:', transactionParameters);
 
-      // Send the blockchain transaction and get the hash
       const txHash = await window.ethereum.request({
         method: 'eth_sendTransaction',
         params: [transactionParameters],
@@ -361,11 +373,10 @@ export default function CustomerProductsPage() {
 
       setTxStep(3);
       
-      // Wait for transaction to be mined
       console.log('⏳ Waiting for transaction to be mined...');
       let receipt = null;
       let attempts = 0;
-      const maxAttempts = 60; // Wait up to 60 seconds
+      const maxAttempts = 60;
       
       while (!receipt && attempts < maxAttempts) {
         try {
@@ -377,14 +388,12 @@ export default function CustomerProductsPage() {
           if (receipt) {
             console.log('✅ Transaction mined!', receipt);
             
-            // Check if transaction was successful
             if (receipt.status === '0x0') {
               throw new Error('Transaction failed on blockchain');
             }
             break;
           }
           
-          // Wait 1 second before checking again
           await new Promise(resolve => setTimeout(resolve, 1000));
           attempts++;
         } catch (err) {
@@ -399,7 +408,6 @@ export default function CustomerProductsPage() {
         console.log('Proceeding with order creation...');
       }
 
-      // Step 4: Create order in backend with blockchain transaction hash
       const orderItems = cart.map(item => ({
         product: item._id,
         quantity: item.quantity,
@@ -419,7 +427,7 @@ export default function CustomerProductsPage() {
           paymentDetails: {
             walletAddress: currentAccount,
             paymentMethod: 'metamask',
-            transactionHash: txHash, // Real blockchain transaction hash
+            transactionHash: txHash,
             blockchainReceipt: receipt,
             network: chainId,
             amountInEth: ethAmount,
@@ -437,17 +445,15 @@ export default function CustomerProductsPage() {
       const data = await response.json();
       console.log('✅ Order created successfully:', data);
 
-      // Success
       setTxStatus('success');
       
-      // Clear cart after 2 seconds and redirect to orders
       setTimeout(() => {
         setCart([]);
         localStorage.removeItem(`cart_${user._id}`);
         setShowCheckout(false);
         setTxStatus(null);
         setTxStep(0);
-        alert(`Order placed successfully!\n\nOrder Number: ${data.orderNumber}\nDelivery OTP: ${data.deliveryOTP}\nTransaction Hash: ${txHash}\n\nPlease save this OTP for delivery verification.`);
+        alert(`Order placed successfully!\n\nOrder Number: ${data.orderNumber}\nTransaction Hash: ${txHash}`);
         navigate('/customer/orders');
       }, 2000);
 
@@ -459,7 +465,6 @@ export default function CustomerProductsPage() {
         setTxStatus(null);
         setTxStep(0);
         
-        // Show user-friendly error message
         let errorMessage = 'Payment failed. Please try again.';
         if (error.message.includes('User denied')) {
           errorMessage = 'Transaction rejected. You cancelled the transaction.';
@@ -517,7 +522,6 @@ export default function CustomerProductsPage() {
                 />
               </div>
 
-              {/* Cart Button */}
               <button
                 onClick={() => setShowCart(!showCart)}
                 className="relative p-2 hover:bg-gray-100 rounded-lg transition-colors"
@@ -626,6 +630,31 @@ export default function CustomerProductsPage() {
                   <h3 className="text-3xl font-bold text-gray-900 mb-4">{selectedProduct.name}</h3>
                   <p className="text-gray-600 mb-6">{selectedProduct.description}</p>
 
+                  {/* Product Rating */}
+                  <div className="flex items-center mb-4">
+                    <div className="flex items-center mr-4">
+                      {[1, 2, 3, 4, 5].map((star) => (
+                        <Star
+                          key={star}
+                          size={20}
+                          className={
+                            star <= Math.floor(productReviews.averageRating)
+                              ? 'fill-yellow-400 text-yellow-400'
+                              : star <= productReviews.averageRating
+                              ? 'fill-yellow-400 text-yellow-400'
+                              : 'text-gray-300'
+                          }
+                        />
+                      ))}
+                      <span className="ml-2 font-semibold text-gray-700">
+                        {productReviews.averageRating}/5
+                      </span>
+                    </div>
+                    <span className="text-gray-600 text-sm">
+                      ({productReviews.totalReviews} reviews)
+                    </span>
+                  </div>
+
                   <div className="mb-6">
                     <div className="flex items-baseline space-x-3 mb-4">
                       <span className="text-4xl font-bold text-blue-600">₹{selectedProduct.price}</span>
@@ -696,11 +725,52 @@ export default function CustomerProductsPage() {
                   {/* Add to Cart Button */}
                   <button
                     onClick={() => addToCart(selectedProduct, purchaseQuantity)}
-                    className="w-full py-4 bg-blue-600 text-white rounded-xl font-bold text-lg hover:bg-blue-700 transition-colors flex items-center justify-center space-x-2"
+                    className="w-full py-4 bg-blue-600 text-white rounded-xl font-bold text-lg hover:bg-blue-700 transition-colors flex items-center justify-center space-x-2 mb-6"
                   >
                     <ShoppingCart size={24} />
                     <span>Add to Cart</span>
                   </button>
+
+                  {/* Product Reviews Section */}
+                  <div className="border-t pt-6">
+                    <h4 className="font-semibold text-gray-900 mb-4">Customer Reviews</h4>
+                    
+                    {productReviews.reviews.length === 0 ? (
+                      <div className="text-center py-8">
+                        <Star size={40} className="mx-auto text-gray-300 mb-3" />
+                        <p className="text-gray-600">No reviews yet. Be the first to review!</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-4 max-h-60 overflow-y-auto pr-2">
+                        {productReviews.reviews.map((review, idx) => (
+                          <div key={idx} className="bg-gray-50 p-4 rounded-lg">
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="flex items-center">
+                                {[1, 2, 3, 4, 5].map((star) => (
+                                  <Star
+                                    key={star}
+                                    size={16}
+                                    className={
+                                      star <= review.rating
+                                        ? 'fill-yellow-400 text-yellow-400 mr-1'
+                                        : 'text-gray-300 mr-1'
+                                    }
+                                  />
+                                ))}
+                              </div>
+                              <span className="text-sm text-gray-500">
+                                {new Date(review.createdAt).toLocaleDateString()}
+                              </span>
+                            </div>
+                            <p className="font-medium text-gray-900">{review.customerName}</p>
+                            {review.comment && (
+                              <p className="text-gray-600 text-sm mt-2">{review.comment}</p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -843,7 +913,6 @@ export default function CustomerProductsPage() {
           <div className="bg-white rounded-2xl max-w-2xl w-full p-8 max-h-[90vh] overflow-y-auto">
             <h2 className="text-2xl font-bold text-gray-900 mb-4">Delivery Address</h2>
             
-            {/* Use Current Location Button */}
             <button
               onClick={getCurrentLocation}
               disabled={loadingLocation}

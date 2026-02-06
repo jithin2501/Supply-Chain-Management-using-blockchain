@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Package, Truck, MapPin, Clock, CheckCircle, XCircle,
   ArrowLeft, Star, MessageSquare, RotateCcw, AlertCircle,
-  Phone, Mail, ChevronRight, CheckCircle2, Home
+  Phone, Mail, ChevronRight, CheckCircle2, Home, Key
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -13,8 +13,7 @@ export default function CustomerOrdersPage() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedOrder, setSelectedOrder] = useState(null);
-  const [showOTPModal, setShowOTPModal] = useState(false);
-  const [otpInput, setOtpInput] = useState(['', '', '', '']);
+  const [selectedProduct, setSelectedProduct] = useState(null);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [showReturnModal, setShowReturnModal] = useState(false);
   const [feedback, setFeedback] = useState({ rating: 0, comment: '' });
@@ -73,33 +72,9 @@ export default function CustomerOrdersPage() {
     return icons[status] || Clock;
   };
 
-  const handleOTPSubmit = async (orderId) => {
-    const enteredOTP = otpInput.join('');
-    
+  const handleFeedbackSubmit = async () => {
     try {
-      const response = await fetch(`${API_URL}/orders/${orderId}/verify-otp`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ otp: enteredOTP })
-      });
-
-      if (!response.ok) throw new Error('OTP verification failed');
-
-      alert('Delivery confirmed successfully!');
-      setShowOTPModal(false);
-      setOtpInput(['', '', '', '']);
-      fetchOrders();
-    } catch (error) {
-      alert('Invalid OTP. Please try again.');
-    }
-  };
-
-  const handleFeedbackSubmit = async (orderId) => {
-    try {
-      const response = await fetch(`${API_URL}/orders/${orderId}/feedback`, {
+      const response = await fetch(`${API_URL}/orders/${selectedOrder._id}/feedback/${selectedProduct._id}`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -142,26 +117,13 @@ export default function CustomerOrdersPage() {
   };
 
   const isReturnEligible = (order) => {
-    if (order.status !== 'delivered' || order.feedback?.submitted) return false;
+    if (order.status !== 'delivered') return false;
     
     const deliveredDate = new Date(order.deliveredAt);
     const currentDate = new Date();
     const daysDiff = Math.floor((currentDate - deliveredDate) / (1000 * 60 * 60 * 24));
     
     return daysDiff <= 14;
-  };
-
-  const handleOTPChange = (index, value) => {
-    if (value.length <= 1 && /^\d*$/.test(value)) {
-      const newOTP = [...otpInput];
-      newOTP[index] = value;
-      setOtpInput(newOTP);
-
-      // Auto-focus next input
-      if (value && index < 3) {
-        document.getElementById(`otp-${index + 1}`).focus();
-      }
-    }
   };
 
   if (loading) {
@@ -222,7 +184,12 @@ export default function CustomerOrdersPage() {
             {orders.map((order) => {
               const StatusIcon = getStatusIcon(order.status);
               const canReturn = isReturnEligible(order);
-              const canSubmitFeedback = order.status === 'delivered' && !order.feedback?.submitted;
+              const canSubmitFeedback = order.status === 'delivered';
+              
+              const reviewedProductIds = order.feedback?.map(f => f.productId?.toString()) || [];
+              const unreviewedProducts = order.items
+                .filter(item => !reviewedProductIds.includes(item.product?._id?.toString()))
+                .map(item => item.product);
 
               return (
                 <div key={order._id} className="bg-white rounded-2xl shadow-sm overflow-hidden">
@@ -250,22 +217,55 @@ export default function CustomerOrdersPage() {
                       </div>
                     </div>
 
+                    {/* Delivery OTP Section */}
+                    {(order.status === 'out_for_delivery' || order.status === 'near_location') && order.deliveryOTP && (
+                      <div className="mb-4 p-4 bg-purple-50 border border-purple-200 rounded-lg">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-3">
+                            <Key className="text-purple-600" size={24} />
+                            <div>
+                              <p className="font-semibold text-purple-900">Delivery Verification OTP</p>
+                              <p className="text-sm text-purple-700">
+                                Provide this OTP to the delivery partner when they arrive
+                              </p>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-3xl font-bold text-purple-900 tracking-wider">
+                              {order.deliveryOTP}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     {/* Products in Order */}
                     <div className="space-y-3">
-                      {order.items.map((item, idx) => (
-                        <div key={idx} className="flex items-center space-x-4 p-3 bg-gray-50 rounded-lg">
-                          <img
-                            src={item.product.image}
-                            alt={item.product.name}
-                            className="w-16 h-16 object-cover rounded-lg"
-                          />
-                          <div className="flex-1">
-                            <h4 className="font-semibold text-gray-900">{item.product.name}</h4>
-                            <p className="text-sm text-gray-600">Quantity: {item.quantity} × ₹{item.price}</p>
+                      {order.items.map((item, idx) => {
+                        const isReviewed = reviewedProductIds.includes(item.product?._id?.toString());
+                        return (
+                          <div key={idx} className="flex items-center space-x-4 p-3 bg-gray-50 rounded-lg">
+                            <img
+                              src={item.product?.image}
+                              alt={item.product?.name}
+                              className="w-16 h-16 object-cover rounded-lg"
+                            />
+                            <div className="flex-1">
+                              <h4 className="font-semibold text-gray-900">{item.product?.name}</h4>
+                              <p className="text-sm text-gray-600">Quantity: {item.quantity} × ₹{item.price}</p>
+                              
+                              {/* Show if reviewed */}
+                              {isReviewed && (
+                                <div className="flex items-center mt-1">
+                                  <Star size={14} className="text-yellow-400 fill-yellow-400 mr-1" />
+                                  <span className="text-xs text-gray-600">Reviewed</span>
+                                </div>
+                              )}
+                            </div>
+                            <p className="font-semibold text-gray-900">₹{(item.quantity * item.price).toFixed(2)}</p>
                           </div>
-                          <p className="font-semibold text-gray-900">₹{(item.quantity * item.price).toFixed(2)}</p>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -322,29 +322,17 @@ export default function CustomerOrdersPage() {
                   {/* Action Buttons */}
                   <div className="p-6 bg-white">
                     <div className="flex flex-wrap gap-3">
-                      {order.status === 'out_for_delivery' && (
+                      {canSubmitFeedback && unreviewedProducts.length > 0 && (
                         <button
                           onClick={() => {
                             setSelectedOrder(order);
-                            setShowOTPModal(true);
-                          }}
-                          className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition flex items-center"
-                        >
-                          <CheckCircle2 size={18} className="mr-2" />
-                          Confirm Delivery
-                        </button>
-                      )}
-
-                      {canSubmitFeedback && (
-                        <button
-                          onClick={() => {
-                            setSelectedOrder(order);
+                            setSelectedProduct(unreviewedProducts[0]);
                             setShowFeedbackModal(true);
                           }}
                           className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition flex items-center"
                         >
                           <Star size={18} className="mr-2" />
-                          Rate & Review
+                          Rate & Review ({unreviewedProducts.length} items)
                         </button>
                       )}
 
@@ -361,10 +349,17 @@ export default function CustomerOrdersPage() {
                         </button>
                       )}
 
-                      {order.feedback?.submitted && (
+                      {order.feedback?.length > 0 && (
+                        <div className="px-6 py-3 bg-green-100 rounded-lg flex items-center text-green-800">
+                          <CheckCircle size={18} className="mr-2" />
+                          Feedback Submitted ({order.feedback.length}/{order.items.length})
+                        </div>
+                      )}
+
+                      {order.status === 'delivered' && order.feedback?.length === order.items.length && (
                         <div className="px-6 py-3 bg-gray-100 rounded-lg flex items-center text-gray-600">
                           <CheckCircle size={18} className="mr-2" />
-                          Feedback Submitted
+                          All Items Reviewed
                         </div>
                       )}
                     </div>
@@ -376,66 +371,26 @@ export default function CustomerOrdersPage() {
         )}
       </div>
 
-      {/* OTP Verification Modal */}
-      {showOTPModal && selectedOrder && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-8">
-            <h2 className="text-2xl font-bold text-gray-900 mb-4">Verify Delivery</h2>
-            <p className="text-gray-600 mb-6">
-              Please enter the 4-digit OTP provided by your delivery partner to confirm delivery.
-            </p>
-
-            <div className="flex justify-center space-x-3 mb-6">
-              {otpInput.map((digit, index) => (
-                <input
-                  key={index}
-                  id={`otp-${index}`}
-                  type="text"
-                  maxLength="1"
-                  value={digit}
-                  onChange={(e) => handleOTPChange(index, e.target.value)}
-                  className="w-14 h-14 text-center text-2xl font-bold border-2 border-gray-300 rounded-lg focus:border-blue-600 focus:ring-2 focus:ring-blue-200"
-                />
-              ))}
-            </div>
-
-            <div className="bg-blue-50 p-4 rounded-lg mb-6">
-              <p className="text-sm text-blue-800 flex items-start">
-                <AlertCircle size={18} className="mr-2 mt-0.5 flex-shrink-0" />
-                Your OTP: <span className="font-bold ml-1">{selectedOrder.deliveryOTP}</span>
-              </p>
-            </div>
-
-            <div className="flex space-x-3">
-              <button
-                onClick={() => {
-                  setShowOTPModal(false);
-                  setOtpInput(['', '', '', '']);
-                }}
-                className="flex-1 px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => handleOTPSubmit(selectedOrder._id)}
-                disabled={otpInput.some(d => !d)}
-                className="flex-1 px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition disabled:bg-gray-300 disabled:cursor-not-allowed"
-              >
-                Verify & Confirm
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Feedback Modal */}
-      {showFeedbackModal && selectedOrder && (
+      {showFeedbackModal && selectedOrder && selectedProduct && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-8">
-            <h2 className="text-2xl font-bold text-gray-900 mb-4">Rate Your Experience</h2>
+            <h2 className="text-2xl font-bold text-gray-900 mb-4">Rate Your Product</h2>
             
             <div className="mb-6">
-              <p className="text-gray-700 font-medium mb-3">How would you rate this order?</p>
+              <div className="flex items-center space-x-4 mb-4">
+                <img
+                  src={selectedProduct.image}
+                  alt={selectedProduct.name}
+                  className="w-16 h-16 object-cover rounded-lg"
+                />
+                <div>
+                  <h3 className="font-semibold text-gray-900">{selectedProduct.name}</h3>
+                  <p className="text-sm text-gray-600">From Order #{selectedOrder.orderNumber}</p>
+                </div>
+              </div>
+              
+              <p className="text-gray-700 font-medium mb-3">How would you rate this product?</p>
               <div className="flex justify-center space-x-2">
                 {[1, 2, 3, 4, 5].map((star) => (
                   <button
@@ -457,7 +412,7 @@ export default function CustomerOrdersPage() {
               <textarea
                 value={feedback.comment}
                 onChange={(e) => setFeedback({ ...feedback, comment: e.target.value })}
-                placeholder="Tell us about your experience..."
+                placeholder="Tell us about this product..."
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 resize-none"
                 rows="4"
               />
@@ -474,11 +429,11 @@ export default function CustomerOrdersPage() {
                 Cancel
               </button>
               <button
-                onClick={() => handleFeedbackSubmit(selectedOrder._id)}
+                onClick={handleFeedbackSubmit}
                 disabled={feedback.rating === 0}
                 className="flex-1 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition disabled:bg-gray-300 disabled:cursor-not-allowed"
               >
-                Submit Feedback
+                Submit Review
               </button>
             </div>
           </div>

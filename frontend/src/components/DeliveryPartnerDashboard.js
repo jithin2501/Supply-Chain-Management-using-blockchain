@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Truck, Package, MapPin, CheckCircle, Navigation,
   Phone, Clock, AlertCircle, LogOut, RefreshCw,
-  User, Home, Search, List, PlusCircle
+  User, Home, Search, List, PlusCircle, Key, Lock
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -13,12 +13,17 @@ export default function DeliveryPartnerDashboard() {
   const [assignments, setAssignments] = useState([]);
   const [pendingOrders, setPendingOrders] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('my-assignments'); // 'my-assignments' or 'available-orders'
+  const [activeTab, setActiveTab] = useState('my-assignments');
   const [stats, setStats] = useState({
     totalDeliveries: 0,
     completedToday: 0,
     pending: 0
   });
+  const [showOTPModal, setShowOTPModal] = useState(false);
+  const [showVerifyOTPModal, setShowVerifyOTPModal] = useState(false);
+  const [selectedOrder, setSelectedOrder] = useState(null);
+  const [otpInput, setOtpInput] = useState(['', '', '', '', '', '']);
+  const [generatedOTP, setGeneratedOTP] = useState('');
 
   const token = localStorage.getItem('token');
   const user = JSON.parse(localStorage.getItem('user') || '{}');
@@ -98,12 +103,10 @@ export default function DeliveryPartnerDashboard() {
 
       alert('Order assigned successfully! It now appears in "My Assignments".');
       
-      // Refresh both lists
       fetchAssignments();
       fetchPendingOrders();
       fetchStats();
       
-      // Switch to My Assignments tab
       setActiveTab('my-assignments');
     } catch (error) {
       alert(`Failed to assign order: ${error.message}`);
@@ -131,12 +134,51 @@ export default function DeliveryPartnerDashboard() {
     }
   };
 
-  const markAsDelivered = async (orderId) => {
-    if (!window.confirm('Are you sure you want to mark this order as delivered?')) {
-      return;
-    }
+  const generateOTP = async (orderId) => {
+    try {
+      const response = await fetch(`${API_URL}/delivery/orders/${orderId}/generate-otp`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
 
-    await updateOrderStatus(orderId, 'delivered');
+      if (!response.ok) throw new Error('Failed to generate OTP');
+
+      const data = await response.json();
+      setGeneratedOTP(data.deliveryOTP);
+      alert(`OTP generated: ${data.deliveryOTP}\n\nGive this OTP to the customer and ask them to provide it back to you for delivery verification.`);
+      
+      fetchAssignments();
+    } catch (error) {
+      alert('Failed to generate OTP');
+    }
+  };
+
+  const verifyCustomerOTP = async (orderId) => {
+    const enteredOTP = otpInput.join('');
+    
+    try {
+      const response = await fetch(`${API_URL}/delivery/orders/${orderId}/verify-otp`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ otp: enteredOTP })
+      });
+
+      if (!response.ok) throw new Error('OTP verification failed');
+
+      alert('Delivery verified successfully!');
+      setShowVerifyOTPModal(false);
+      setOtpInput(['', '', '', '', '', '']);
+      fetchAssignments();
+      fetchStats();
+    } catch (error) {
+      alert('Invalid OTP. Please ask customer for the correct OTP.');
+    }
   };
 
   const getStatusColor = (status) => {
@@ -161,6 +203,18 @@ export default function DeliveryPartnerDashboard() {
     fetchAssignments();
     fetchPendingOrders();
     fetchStats();
+  };
+
+  const handleOTPChange = (index, value) => {
+    if (value.length <= 1 && /^\d*$/.test(value)) {
+      const newOTP = [...otpInput];
+      newOTP[index] = value;
+      setOtpInput(newOTP);
+
+      if (value && index < 5) {
+        document.getElementById(`delivery-otp-${index + 1}`).focus();
+      }
+    }
   };
 
   if (loading) {
@@ -295,7 +349,10 @@ export default function DeliveryPartnerDashboard() {
                     order={assignment}
                     getStatusColor={getStatusColor}
                     updateOrderStatus={updateOrderStatus}
-                    markAsDelivered={markAsDelivered}
+                    generateOTP={generateOTP}
+                    setSelectedOrder={setSelectedOrder}
+                    setShowOTPModal={setShowOTPModal}
+                    setShowVerifyOTPModal={setShowVerifyOTPModal}
                     showActions={true}
                   />
                 ))}
@@ -406,12 +463,116 @@ export default function DeliveryPartnerDashboard() {
           </div>
         )}
       </div>
+
+      {/* Generate OTP Modal */}
+      {showOTPModal && selectedOrder && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-8">
+            <h2 className="text-2xl font-bold text-gray-900 mb-4">Generate Delivery OTP</h2>
+            <p className="text-gray-600 mb-6">
+              This OTP will be shown to the customer in their "My Orders" section when the order is out for delivery.
+              The customer must provide this OTP back to you for delivery verification.
+            </p>
+
+            <div className="bg-blue-50 p-6 rounded-lg mb-6 text-center">
+              <Key size={48} className="mx-auto mb-4 text-blue-600" />
+              <p className="text-sm text-blue-800 mb-2">OTP for Order #{selectedOrder.orderNumber}</p>
+              {generatedOTP ? (
+                <div>
+                  <p className="text-3xl font-bold text-blue-900 tracking-wider">{generatedOTP}</p>
+                  <p className="text-sm text-blue-700 mt-2">Give this to the customer</p>
+                </div>
+              ) : (
+                <p className="text-lg text-blue-700">Click "Generate OTP" below</p>
+              )}
+            </div>
+
+            <div className="flex space-x-3">
+              <button
+                onClick={() => {
+                  setShowOTPModal(false);
+                  setGeneratedOTP('');
+                }}
+                className="flex-1 px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition"
+              >
+                Close
+              </button>
+              <button
+                onClick={() => generateOTP(selectedOrder._id)}
+                className="flex-1 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+              >
+                {generatedOTP ? 'Regenerate OTP' : 'Generate OTP'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Verify Customer OTP Modal */}
+      {showVerifyOTPModal && selectedOrder && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-8">
+            <h2 className="text-2xl font-bold text-gray-900 mb-4">Verify Customer OTP</h2>
+            <p className="text-gray-600 mb-6">
+              Ask the customer for the OTP displayed in their "My Orders" section and enter it below to verify delivery.
+            </p>
+
+            <div className="flex justify-center space-x-2 mb-6">
+              {otpInput.map((digit, index) => (
+                <input
+                  key={index}
+                  id={`delivery-otp-${index}`}
+                  type="text"
+                  maxLength="1"
+                  value={digit}
+                  onChange={(e) => handleOTPChange(index, e.target.value)}
+                  className="w-12 h-12 text-center text-2xl font-bold border-2 border-gray-300 rounded-lg focus:border-blue-600 focus:ring-2 focus:ring-blue-200"
+                />
+              ))}
+            </div>
+
+            <div className="bg-yellow-50 p-4 rounded-lg mb-6">
+              <p className="text-sm text-yellow-800 flex items-start">
+                <AlertCircle size={18} className="mr-2 mt-0.5 flex-shrink-0" />
+                The customer should see this OTP in their "My Orders" page under Order #{selectedOrder.orderNumber}
+              </p>
+            </div>
+
+            <div className="flex space-x-3">
+              <button
+                onClick={() => {
+                  setShowVerifyOTPModal(false);
+                  setOtpInput(['', '', '', '', '', '']);
+                }}
+                className="flex-1 px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => verifyCustomerOTP(selectedOrder._id)}
+                disabled={otpInput.some(d => !d)}
+                className="flex-1 px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition disabled:bg-gray-300 disabled:cursor-not-allowed"
+              >
+                Verify & Mark Delivered
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-// Separate component for order card to reduce code duplication
-function OrderCard({ order, getStatusColor, updateOrderStatus, markAsDelivered, showActions }) {
+function OrderCard({ 
+  order, 
+  getStatusColor, 
+  updateOrderStatus, 
+  generateOTP,
+  setSelectedOrder,
+  setShowOTPModal,
+  setShowVerifyOTPModal,
+  showActions 
+}) {
   return (
     <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
       <div className="p-6">
@@ -431,8 +592,17 @@ function OrderCard({ order, getStatusColor, updateOrderStatus, markAsDelivered, 
             </p>
           </div>
           <div className="text-right">
-            <p className="text-sm text-gray-600">Delivery OTP</p>
-            <p className="text-3xl font-bold text-blue-600">{order.deliveryOTP}</p>
+            {order.deliveryOTP ? (
+              <div>
+                <p className="text-sm text-gray-600">Delivery OTP</p>
+                <p className="text-3xl font-bold text-green-600">{order.deliveryOTP}</p>
+              </div>
+            ) : (
+              <div>
+                <p className="text-sm text-gray-600">Delivery OTP</p>
+                <p className="text-lg font-semibold text-gray-400">Not generated</p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -501,6 +671,29 @@ function OrderCard({ order, getStatusColor, updateOrderStatus, markAsDelivered, 
 
             {order.status === 'out_for_delivery' && (
               <>
+                {!order.deliveryOTP ? (
+                  <button
+                    onClick={() => {
+                      setSelectedOrder(order);
+                      setShowOTPModal(true);
+                    }}
+                    className="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition flex items-center"
+                  >
+                    <Key size={18} className="mr-2" />
+                    Generate OTP
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => {
+                      setSelectedOrder(order);
+                      setShowVerifyOTPModal(true);
+                    }}
+                    className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition flex items-center"
+                  >
+                    <Lock size={18} className="mr-2" />
+                    Verify OTP & Deliver
+                  </button>
+                )}
                 <button
                   onClick={() => updateOrderStatus(order._id, 'near_location')}
                   className="px-6 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition flex items-center"
@@ -508,23 +701,19 @@ function OrderCard({ order, getStatusColor, updateOrderStatus, markAsDelivered, 
                   <MapPin size={18} className="mr-2" />
                   Near Location
                 </button>
-                <button
-                  onClick={() => markAsDelivered(order._id)}
-                  className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition flex items-center"
-                >
-                  <CheckCircle size={18} className="mr-2" />
-                  Mark as Delivered
-                </button>
               </>
             )}
 
             {order.status === 'near_location' && (
               <button
-                onClick={() => markAsDelivered(order._id)}
+                onClick={() => {
+                  setSelectedOrder(order);
+                  setShowVerifyOTPModal(true);
+                }}
                 className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition flex items-center"
               >
-                <CheckCircle size={18} className="mr-2" />
-                Mark as Delivered
+                <Lock size={18} className="mr-2" />
+                Verify OTP & Deliver
               </button>
             )}
 
@@ -554,7 +743,11 @@ function OrderCard({ order, getStatusColor, updateOrderStatus, markAsDelivered, 
           <div className="mt-4 p-4 bg-blue-50 rounded-lg">
             <p className="text-sm text-blue-800 flex items-start">
               <AlertCircle size={18} className="mr-2 mt-0.5 flex-shrink-0" />
-              After delivery, customer will provide the OTP <span className="font-bold mx-1">{order.deliveryOTP}</span> for verification. Mark as delivered only after receiving the correct OTP.
+              {order.deliveryOTP ? (
+                <>Ask customer for OTP: <span className="font-bold mx-1">{order.deliveryOTP}</span> to complete delivery.</>
+              ) : (
+                <>Generate OTP when you start delivery. Customer will see it in their "My Orders" page.</>
+              )}
             </p>
           </div>
         )}
