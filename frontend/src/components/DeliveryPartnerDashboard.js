@@ -4,7 +4,9 @@ import {
   Phone, Clock, AlertCircle, LogOut, RefreshCw,
   User, Home, Search, List, PlusCircle, Key, Lock,
   ChevronRight, ArrowLeft, MoreVertical, Edit, Download,
-  Eye, EyeOff, Shield
+  Eye, EyeOff, Shield, RotateCcw, FileText, Check, X,
+  ThumbsUp, ThumbsDown, Calendar, DollarSign, Loader2,
+  ShieldCheck, Mail, MessageSquare, PhoneCall, ExternalLink
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -14,20 +16,31 @@ export default function DeliveryPartnerDashboard() {
   const navigate = useNavigate();
   const [assignments, setAssignments] = useState([]);
   const [pendingOrders, setPendingOrders] = useState([]);
+  const [returnRequests, setReturnRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('my-assignments');
   const [stats, setStats] = useState({
     totalDeliveries: 0,
     completedToday: 0,
-    pending: 0
+    pending: 0,
+    returns: 0
   });
   const [showOTPConfirmModal, setShowOTPConfirmModal] = useState(false);
   const [showGenerateOTPModal, setShowGenerateOTPModal] = useState(false);
   const [showVerifyOTPModal, setShowVerifyOTPModal] = useState(false);
+  const [showReturnModal, setShowReturnModal] = useState(false);
+  const [showReturnDetailsModal, setShowReturnDetailsModal] = useState(false);
+  const [showReturnActionModal, setShowReturnActionModal] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState(null);
+  const [selectedReturnRequest, setSelectedReturnRequest] = useState(null);
   const [otpInput, setOtpInput] = useState(['', '', '', '', '', '']);
-  const [otpSentTo, setOtpSentTo] = useState(''); // Changed: stores phone number where OTP was sent
+  const [otpSentTo, setOtpSentTo] = useState('');
   const [viewMode, setViewMode] = useState('list');
+  const [returnAction, setReturnAction] = useState('approve');
+  const [returnPickupDate, setReturnPickupDate] = useState('');
+  const [returnPickupTime, setReturnPickupTime] = useState('');
+  const [returnNotes, setReturnNotes] = useState('');
+  const [processingAction, setProcessingAction] = useState(false);
 
   // Token and user management
   const getToken = () => {
@@ -65,6 +78,7 @@ export default function DeliveryPartnerDashboard() {
     fetchAssignments();
     fetchPendingOrders();
     fetchStats();
+    fetchReturnRequests();
 
     // Set up fetch interceptor
     const originalFetch = window.fetch;
@@ -90,47 +104,6 @@ export default function DeliveryPartnerDashboard() {
       window.fetch = originalFetch;
     };
   }, []);
-
-  const checkTokenAndUser = () => {
-    const currentToken = getToken();
-    const currentUser = getUser();
-    
-    console.log('🔍 Token exists:', !!currentToken);
-    console.log('🔍 User role:', currentUser.role);
-    
-    if (!currentToken) {
-      console.error('❌ No token found');
-      return false;
-    }
-    
-    if (!currentUser.role) {
-      console.error('❌ No user role found');
-      return false;
-    }
-    
-    if (currentUser.role !== 'delivery_partner') {
-      console.error('❌ User is not a delivery partner:', currentUser.role);
-      return false;
-    }
-    
-    // Check if token is expired (basic check)
-    try {
-      const payload = JSON.parse(atob(currentToken.split('.')[1]));
-      const isExpired = payload.exp * 1000 < Date.now();
-      console.log('🔍 Token expiry:', new Date(payload.exp * 1000).toLocaleString());
-      console.log('🔍 Token is expired:', isExpired);
-      
-      if (isExpired) {
-        console.error('❌ Token has expired');
-        return false;
-      }
-    } catch (error) {
-      console.error('❌ Error parsing token:', error);
-      return false;
-    }
-    
-    return true;
-  };
 
   const fetchAssignments = async () => {
     try {
@@ -211,6 +184,31 @@ export default function DeliveryPartnerDashboard() {
       setStats(data);
     } catch (error) {
       console.error('Error fetching stats:', error);
+    }
+  };
+
+  const fetchReturnRequests = async () => {
+    try {
+      const currentToken = getToken();
+      if (!currentToken) {
+        return;
+      }
+
+      const response = await fetch(`${API_URL}/delivery/return-requests`, {
+        headers: { 'Authorization': `Bearer ${currentToken}` }
+      });
+      
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          return;
+        }
+        throw new Error('Failed to fetch return requests');
+      }
+      
+      const data = await response.json();
+      setReturnRequests(data);
+    } catch (error) {
+      console.error('Error fetching return requests:', error);
     }
   };
 
@@ -306,12 +304,6 @@ export default function DeliveryPartnerDashboard() {
   };
 
   const generateOTPForOrder = async (orderId) => {
-    if (!checkTokenAndUser()) {
-      alert('Session invalid. Please login again.');
-      handleLogout();
-      return;
-    }
-
     try {
       const currentToken = getToken();
       const response = await fetch(`${API_URL}/delivery/orders/${orderId}/generate-otp`, {
@@ -336,12 +328,13 @@ export default function DeliveryPartnerDashboard() {
       }
 
       // Store where OTP was sent (phone number)
-      const phoneNumber = data.otpSentTo || data.order?.deliveryAddress?.phone;
+      const phoneNumber = data.order?.deliveryAddress?.phone;
       setOtpSentTo(phoneNumber);
       
       // Update selected order to mark that OTP has been generated
       setSelectedOrder(prev => ({ 
         ...prev, 
+        deliveryOTP: data.deliveryOTP,
         otpGenerated: true,
         otpSentTo: phoneNumber
       }));
@@ -355,7 +348,6 @@ export default function DeliveryPartnerDashboard() {
     } catch (error) {
       console.error('Generate OTP error:', error);
       alert(`Failed to generate OTP: ${error.message}`);
-      throw error;
     }
   };
 
@@ -364,12 +356,6 @@ export default function DeliveryPartnerDashboard() {
     
     if (enteredOTP.length !== 6) {
       alert('Please enter a 6-digit OTP');
-      return;
-    }
-
-    if (!checkTokenAndUser()) {
-      alert('Session invalid. Please login again.');
-      handleLogout();
       return;
     }
 
@@ -400,14 +386,121 @@ export default function DeliveryPartnerDashboard() {
       alert('Delivery verified successfully! Order marked as delivered.');
       setShowVerifyOTPModal(false);
       setOtpInput(['', '', '', '', '', '']);
-      setOtpSentTo(''); // Clear the phone number
+      setOtpSentTo('');
       
       fetchAssignments();
       fetchStats();
       
-      setSelectedOrder(prev => ({ ...prev, status: 'delivered' }));
+      setSelectedOrder(prev => ({ ...prev, status: 'delivered', deliveryOTP: null }));
     } catch (error) {
       alert(error.message || 'Invalid OTP. Please ask customer for the correct OTP.');
+    }
+  };
+
+  const handleProcessReturnRequest = async () => {
+    if (!selectedReturnRequest) return;
+
+    if (!returnAction) {
+      alert('Please select an action (Approve or Reject)');
+      return;
+    }
+
+    if (returnAction === 'approve' && !returnPickupDate) {
+      alert('Please select a pickup date for approved returns');
+      return;
+    }
+
+    try {
+      setProcessingAction(true);
+      const currentToken = getToken();
+      
+      const response = await fetch(`${API_URL}/delivery/orders/${selectedReturnRequest._id}/process-return`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${currentToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          action: returnAction,
+          pickupDate: returnPickupDate,
+          pickupTime: returnPickupTime || '9:00 AM - 6:00 PM',
+          notes: returnNotes
+        })
+      });
+
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.message || 'Failed to process return request');
+      }
+
+      alert(`Return request ${returnAction}ed successfully!`);
+      setShowReturnActionModal(false);
+      setReturnAction('approve');
+      setReturnPickupDate('');
+      setReturnPickupTime('');
+      setReturnNotes('');
+      setProcessingAction(false);
+      
+      // Refresh data
+      fetchAssignments();
+      fetchReturnRequests();
+      fetchStats();
+      
+      // Update selected order if it's the same
+      if (selectedOrder && selectedOrder._id === selectedReturnRequest._id) {
+        setSelectedOrder(prev => ({
+          ...prev,
+          returnRequest: data.order?.returnRequest,
+          status: data.order?.status
+        }));
+      }
+      
+    } catch (error) {
+      console.error('Error processing return:', error);
+      alert(`Failed to process return: ${error.message}`);
+      setProcessingAction(false);
+    }
+  };
+
+  const handleUpdateReturnStatus = async (orderId, status, notes = '') => {
+    try {
+      const currentToken = getToken();
+      
+      const response = await fetch(`${API_URL}/delivery/orders/${orderId}/return-status`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${currentToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ status, notes })
+      });
+
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.message || 'Failed to update return status');
+      }
+
+      alert(`Return status updated to ${status.replace('_', ' ')}`);
+      
+      // Refresh data
+      fetchAssignments();
+      fetchReturnRequests();
+      fetchStats();
+      
+      // Update selected order if it's the same
+      if (selectedOrder && selectedOrder._id === orderId) {
+        setSelectedOrder(prev => ({
+          ...prev,
+          returnRequest: data.order?.returnRequest,
+          status: data.order?.status
+        }));
+      }
+      
+    } catch (error) {
+      console.error('Error updating return status:', error);
+      alert(`Failed to update return status: ${error.message}`);
     }
   };
 
@@ -418,7 +511,25 @@ export default function DeliveryPartnerDashboard() {
       processing: 'bg-indigo-100 text-indigo-800',
       out_for_delivery: 'bg-purple-100 text-purple-800',
       near_location: 'bg-orange-100 text-orange-800',
-      delivered: 'bg-green-100 text-green-800'
+      delivered: 'bg-green-100 text-green-800',
+      cancelled: 'bg-red-100 text-red-800',
+      returned: 'bg-gray-100 text-gray-800',
+      return_requested: 'bg-red-100 text-red-800'
+    };
+    return colors[status] || 'bg-gray-100 text-gray-800';
+  };
+
+  const getReturnStatusColor = (status) => {
+    const colors = {
+      pending: 'bg-yellow-100 text-yellow-800',
+      approved: 'bg-green-100 text-green-800',
+      rejected: 'bg-red-100 text-red-800',
+      pickup_scheduled: 'bg-blue-100 text-blue-800',
+      picked_up: 'bg-purple-100 text-purple-800',
+      in_transit: 'bg-indigo-100 text-indigo-800',
+      received_at_warehouse: 'bg-teal-100 text-teal-800',
+      refund_initiated: 'bg-orange-100 text-orange-800',
+      refund_completed: 'bg-green-100 text-green-800'
     };
     return colors[status] || 'bg-gray-100 text-gray-800';
   };
@@ -426,6 +537,16 @@ export default function DeliveryPartnerDashboard() {
   const getStatusBadge = (status) => {
     const statusText = status.replace(/_/g, ' ').toUpperCase();
     const colors = getStatusColor(status);
+    return (
+      <span className={`px-3 py-1 rounded-full text-xs font-semibold ${colors}`}>
+        {statusText}
+      </span>
+    );
+  };
+
+  const getReturnStatusBadge = (status) => {
+    const statusText = status.replace(/_/g, ' ').toUpperCase();
+    const colors = getReturnStatusColor(status);
     return (
       <span className={`px-3 py-1 rounded-full text-xs font-semibold ${colors}`}>
         {statusText}
@@ -461,6 +582,7 @@ export default function DeliveryPartnerDashboard() {
     fetchAssignments();
     fetchPendingOrders();
     fetchStats();
+    fetchReturnRequests();
   };
 
   const handleOTPChange = (index, value) => {
@@ -480,36 +602,32 @@ export default function DeliveryPartnerDashboard() {
     setViewMode('detail');
   };
 
+  const viewReturnDetails = (request) => {
+    setSelectedReturnRequest(request);
+    setShowReturnDetailsModal(true);
+  };
+
   const backToList = () => {
     setViewMode('list');
     setSelectedOrder(null);
-    setOtpSentTo(''); // Clear the phone number
+    setOtpSentTo('');
     setOtpInput(['', '', '', '', '', '']);
   };
 
-  // Test API access function
-  const testApiAccess = async () => {
+  const formatDate = (dateString) => {
+    if (!dateString) return 'N/A';
     try {
-      const currentToken = getToken();
-      console.log('Testing API with token:', currentToken ? 'Token exists' : 'No token');
-      
-      const response = await fetch(`${API_URL}/delivery/assignments`, {
-        headers: { 'Authorization': `Bearer ${currentToken}` }
+      const date = new Date(dateString);
+      if (isNaN(date.getTime())) return 'Invalid Date';
+      return date.toLocaleDateString('en-IN', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
       });
-      console.log('Test response status:', response.status);
-      
-      if (response.ok) {
-        const data = await response.json();
-        console.log('Test response data:', data);
-        alert('API access test successful!');
-      } else {
-        const error = await response.text();
-        console.error('Test response error:', error);
-        alert(`API test failed: ${response.status}`);
-      }
     } catch (error) {
-      console.error('Test error:', error);
-      alert('API test error: ' + error.message);
+      return 'Invalid Date';
     }
   };
 
@@ -549,7 +667,7 @@ export default function DeliveryPartnerDashboard() {
           </div>
 
           {/* Stats Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-8">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mt-8">
             <div className="bg-white/10 backdrop-blur-sm rounded-xl p-6">
               <div className="flex items-center justify-between">
                 <div>
@@ -577,20 +695,21 @@ export default function DeliveryPartnerDashboard() {
                 <Clock size={32} className="text-yellow-300" />
               </div>
             </div>
+            <div className="bg-white/10 backdrop-blur-sm rounded-xl p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-blue-100 text-sm mb-1">Returns</p>
+                  <p className="text-3xl font-bold">{stats.returns || 0}</p>
+                </div>
+                <RotateCcw size={32} className="text-red-300" />
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-6 py-8">
-        {/* Debug button - remove in production */}
-        <button
-          onClick={testApiAccess}
-          className="px-4 py-2 bg-red-600 text-white rounded-lg mb-4"
-        >
-          Test API Access
-        </button>
-
         {viewMode === 'list' ? (
           <>
             {/* Tab Navigation */}
@@ -617,6 +736,17 @@ export default function DeliveryPartnerDashboard() {
                 >
                   <PlusCircle size={18} />
                   <span>Available Orders ({pendingOrders.length})</span>
+                </button>
+                <button
+                  onClick={() => setActiveTab('return-requests')}
+                  className={`px-6 py-3 rounded-lg font-semibold transition flex items-center space-x-2 ${
+                    activeTab === 'return-requests'
+                      ? 'bg-blue-600 text-white'
+                      : 'text-gray-600 hover:bg-gray-100'
+                  }`}
+                >
+                  <RotateCcw size={18} />
+                  <span>Return Requests ({returnRequests.length})</span>
                 </button>
               </div>
               
@@ -687,12 +817,12 @@ export default function DeliveryPartnerDashboard() {
                                 {getStatusBadge(order.status)}
                               </div>
                               <p className="text-sm text-gray-600">
-                                Placed {new Date(order.createdAt).toLocaleString('en-IN')}
+                                Placed {formatDate(order.createdAt)}
                               </p>
                             </div>
                             <div className="text-right">
                               <p className="text-sm font-semibold text-gray-900">Total Amount</p>
-                              <p className="text-2xl font-bold text-blue-600">₹{order.totalAmount.toLocaleString()}</p>
+                              <p className="text-2xl font-bold text-blue-600">₹{order.totalAmount?.toLocaleString() || '0'}</p>
                             </div>
                           </div>
 
@@ -703,10 +833,10 @@ export default function DeliveryPartnerDashboard() {
                                 <User size={18} className="mr-2 text-blue-600" />
                                 Customer Details
                               </h4>
-                              <p className="font-medium text-gray-900">{order.deliveryAddress.name}</p>
+                              <p className="font-medium text-gray-900">{order.deliveryAddress?.name || 'N/A'}</p>
                               <p className="text-sm text-gray-600 mt-2 flex items-center">
                                 <Phone size={14} className="mr-2" />
-                                {order.deliveryAddress.phone}
+                                {order.deliveryAddress?.phone || 'N/A'}
                               </p>
                             </div>
 
@@ -715,11 +845,11 @@ export default function DeliveryPartnerDashboard() {
                                 <MapPin size={18} className="mr-2 text-blue-600" />
                                 Delivery Address
                               </h4>
-                              <p className="text-gray-900">{order.deliveryAddress.street}</p>
+                              <p className="text-gray-900">{order.deliveryAddress?.street || 'N/A'}</p>
                               <p className="text-gray-600 text-sm">
-                                {order.deliveryAddress.city}, {order.deliveryAddress.state}
+                                {order.deliveryAddress?.city || 'N/A'}, {order.deliveryAddress?.state || 'N/A'}
                               </p>
-                              <p className="text-gray-600 text-sm">{order.deliveryAddress.pincode}</p>
+                              <p className="text-gray-600 text-sm">{order.deliveryAddress?.pincode || 'N/A'}</p>
                             </div>
                           </div>
 
@@ -731,6 +861,127 @@ export default function DeliveryPartnerDashboard() {
                             <PlusCircle size={20} className="mr-2" />
                             Accept this Delivery
                           </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'return-requests' && (
+              <div>
+                <h2 className="text-2xl font-bold text-gray-900 mb-6">Customer Return Requests</h2>
+                
+                {returnRequests.length === 0 ? (
+                  <div className="text-center py-20 bg-white rounded-2xl shadow-sm">
+                    <RotateCcw size={64} className="mx-auto text-gray-400 mb-4" />
+                    <h3 className="text-xl font-bold text-gray-900 mb-2">No return requests</h3>
+                    <p className="text-gray-600">Customer return requests will appear here</p>
+                  </div>
+                ) : (
+                  <div className="grid gap-6">
+                    {returnRequests.map((request) => (
+                      <div key={request._id} className="bg-white rounded-2xl shadow-sm overflow-hidden">
+                        <div className="p-6">
+                          {/* Request Header */}
+                          <div className="flex items-start justify-between mb-4">
+                            <div>
+                              <div className="flex items-center space-x-3 mb-2">
+                                <h3 className="text-lg font-bold text-gray-900">
+                                  Order #{request.orderNumber}
+                                </h3>
+                                {request.returnRequest?.status && (
+                                  <span className={`px-3 py-1 rounded-full text-xs font-semibold ${getReturnStatusColor(request.returnRequest.status)}`}>
+                                    {request.returnRequest.status.replace(/_/g, ' ').toUpperCase()}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-sm text-gray-600">
+                                Return requested {formatDate(request.returnRequest?.requestedAt)}
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-sm font-semibold text-gray-900">Refund Amount</p>
+                              <p className="text-2xl font-bold text-red-600">₹{request.totalAmount?.toLocaleString() || '0'}</p>
+                            </div>
+                          </div>
+
+                          {/* Return Details */}
+                          <div className="grid md:grid-cols-2 gap-6 mb-6">
+                            <div className="bg-gray-50 p-4 rounded-lg">
+                              <h4 className="font-semibold text-gray-900 mb-3 flex items-center">
+                                <User size={18} className="mr-2 text-blue-600" />
+                                Customer Details
+                              </h4>
+                              <p className="font-medium text-gray-900">{request.deliveryAddress?.name || 'N/A'}</p>
+                              <p className="text-sm text-gray-600 mt-2 flex items-center">
+                                <Phone size={14} className="mr-2" />
+                                {request.deliveryAddress?.phone || 'N/A'}
+                              </p>
+                              <p className="text-sm text-gray-600 mt-2">
+                                <strong>Reason:</strong> {request.returnRequest?.reason || 'N/A'}
+                              </p>
+                            </div>
+
+                            <div className="bg-gray-50 p-4 rounded-lg">
+                              <h4 className="font-semibold text-gray-900 mb-3 flex items-center">
+                                <MapPin size={18} className="mr-2 text-blue-600" />
+                                Pickup Address
+                              </h4>
+                              <p className="font-medium text-gray-900">{request.deliveryAddress?.street || 'N/A'}</p>
+                              <p className="text-gray-600 text-sm">
+                                {request.deliveryAddress?.city || 'N/A'}, {request.deliveryAddress?.state || 'N/A'}
+                              </p>
+                              <p className="text-gray-600 text-sm">{request.deliveryAddress?.pincode || 'N/A'}</p>
+                            </div>
+                          </div>
+
+                          {/* Items to Return */}
+                          <div className="mb-6">
+                            <h4 className="font-semibold text-gray-900 mb-3">Items to Return</h4>
+                            <div className="space-y-3">
+                              {request.items?.map((item, idx) => (
+                                <div key={idx} className="flex items-center space-x-4 p-3 bg-gray-50 rounded-lg">
+                                  <img
+                                    src={item.product?.image}
+                                    alt={item.product?.name}
+                                    className="w-16 h-16 object-cover rounded-lg"
+                                    onError={(e) => {
+                                      e.target.src = 'https://via.placeholder.com/64x64?text=Product';
+                                    }}
+                                  />
+                                  <div className="flex-1">
+                                    <p className="font-medium text-gray-900">{item.product?.name || 'Product'}</p>
+                                    <p className="text-sm text-gray-600">Quantity: {item.quantity || 0}</p>
+                                    <p className="text-sm text-gray-600">Price: ₹{item.price?.toFixed(2) || '0.00'} each</p>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Action Buttons */}
+                          <div className="flex space-x-3">
+                            <button
+                              onClick={() => viewReturnDetails(request)}
+                              className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition flex items-center"
+                            >
+                              <Eye size={18} className="mr-2" />
+                              View Details & Process
+                            </button>
+                            <a
+                              href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                                `${request.deliveryAddress?.street || ''}, ${request.deliveryAddress?.city || ''}, ${request.deliveryAddress?.state || ''} ${request.deliveryAddress?.pincode || ''}`
+                              )}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition flex items-center"
+                            >
+                              <Navigation size={18} className="mr-2" />
+                              Navigate
+                            </a>
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -751,11 +1002,13 @@ export default function DeliveryPartnerDashboard() {
             setShowGenerateOTPModal={setShowGenerateOTPModal}
             setShowVerifyOTPModal={setShowVerifyOTPModal}
             otpSentTo={otpSentTo}
+            setShowReturnModal={setShowReturnModal}
+            formatDate={formatDate}
           />
         )}
       </div>
 
-      {/* Generate OTP Modal (Only shown when order is near_location) */}
+      {/* Generate OTP Modal */}
       {showGenerateOTPModal && selectedOrder && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-8">
@@ -778,9 +1031,9 @@ export default function DeliveryPartnerDashboard() {
               <div className="bg-white p-4 rounded border border-blue-200">
                 <p className="text-sm font-semibold text-gray-900 mb-2">Order Details:</p>
                 <p className="text-sm text-gray-700">Order #{selectedOrder.orderNumber}</p>
-                <p className="text-sm text-gray-700">Customer: {selectedOrder.deliveryAddress.name}</p>
-                <p className="text-sm text-gray-700">Location: {selectedOrder.deliveryAddress.city}</p>
-                <p className="text-sm text-gray-700">Phone: {selectedOrder.deliveryAddress.phone}</p>
+                <p className="text-sm text-gray-700">Customer: {selectedOrder.deliveryAddress?.name || 'N/A'}</p>
+                <p className="text-sm text-gray-700">Location: {selectedOrder.deliveryAddress?.city || 'N/A'}</p>
+                <p className="text-sm text-gray-700">Phone: {selectedOrder.deliveryAddress?.phone || 'N/A'}</p>
               </div>
             </div>
 
@@ -802,7 +1055,7 @@ export default function DeliveryPartnerDashboard() {
         </div>
       )}
 
-      {/* OTP Confirmation Modal (Shows AFTER generating OTP) */}
+      {/* OTP Confirmation Modal */}
       {showOTPConfirmModal && selectedOrder && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-8">
@@ -816,7 +1069,7 @@ export default function DeliveryPartnerDashboard() {
                 <Key size={48} className="text-green-600 mr-3" />
                 <div>
                   <p className="font-semibold text-green-800 text-lg">OTP has been sent to:</p>
-                  <p className="text-xl font-bold text-green-900">{otpSentTo || selectedOrder.otpSentTo || selectedOrder.deliveryAddress?.phone}</p>
+                  <p className="text-xl font-bold text-green-900">{otpSentTo || selectedOrder.deliveryAddress?.phone || 'N/A'}</p>
                 </div>
               </div>
               
@@ -919,6 +1172,282 @@ export default function DeliveryPartnerDashboard() {
           </div>
         </div>
       )}
+
+      {/* Return Details Modal */}
+      {showReturnDetailsModal && selectedReturnRequest && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-4xl w-full p-8 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center space-x-3">
+                <RotateCcw size={32} className="text-purple-600" />
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900">Return Request Details</h2>
+                  <p className="text-gray-600">Order #{selectedReturnRequest.orderNumber}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowReturnDetailsModal(false)}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <X size={24} />
+              </button>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-6 mb-6">
+              {/* Customer Information */}
+              <div className="bg-gray-50 p-6 rounded-lg">
+                <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
+                  <User size={20} className="mr-2 text-blue-600" />
+                  Customer Information
+                </h3>
+                <div className="space-y-3">
+                  <div>
+                    <p className="text-sm text-gray-600">Name</p>
+                    <p className="font-medium text-gray-900">{selectedReturnRequest.deliveryAddress?.name || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Phone</p>
+                    <p className="font-medium text-gray-900">{selectedReturnRequest.deliveryAddress?.phone || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Email</p>
+                    <p className="font-medium text-gray-900">{selectedReturnRequest.customer?.email || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Return Reason</p>
+                    <p className="font-medium text-gray-900">{selectedReturnRequest.returnRequest?.reason || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Requested At</p>
+                    <p className="font-medium text-gray-900">{formatDate(selectedReturnRequest.returnRequest?.requestedAt)}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Pickup Information */}
+              <div className="bg-gray-50 p-6 rounded-lg">
+                <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
+                  <MapPin size={20} className="mr-2 text-blue-600" />
+                  Pickup Information
+                </h3>
+                <div className="space-y-3">
+                  <div>
+                    <p className="text-sm text-gray-600">Address</p>
+                    <p className="font-medium text-gray-900">{selectedReturnRequest.deliveryAddress?.street || 'N/A'}</p>
+                    <p className="text-sm text-gray-600">
+                      {selectedReturnRequest.deliveryAddress?.city || 'N/A'}, {selectedReturnRequest.deliveryAddress?.state || 'N/A'}
+                    </p>
+                    <p className="text-sm text-gray-600">{selectedReturnRequest.deliveryAddress?.pincode || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Delivered On</p>
+                    <p className="font-medium text-gray-900">{formatDate(selectedReturnRequest.deliveredAt)}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Days Since Delivery</p>
+                    <p className="font-medium text-gray-900">
+                      {selectedReturnRequest.deliveredAt ? 
+                        Math.floor((new Date() - new Date(selectedReturnRequest.deliveredAt)) / (1000 * 60 * 60 * 24)) : 
+                        'N/A'} days
+                    </p>
+                  </div>
+                  {selectedReturnRequest.returnRequest?.pickupSchedule?.date && (
+                    <div>
+                      <p className="text-sm text-gray-600">Scheduled Pickup</p>
+                      <p className="font-medium text-gray-900">
+                        {selectedReturnRequest.returnRequest.pickupSchedule.date} at {selectedReturnRequest.returnRequest.pickupSchedule.time}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Items Information */}
+            <div className="mb-6">
+              <h3 className="font-semibold text-gray-900 mb-4">Items to Return</h3>
+              <div className="space-y-3">
+                {selectedReturnRequest.items?.map((item, idx) => (
+                  <div key={idx} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                    <div className="flex items-center space-x-4">
+                      <img
+                        src={item.product?.image}
+                        alt={item.product?.name}
+                        className="w-16 h-16 object-cover rounded-lg"
+                        onError={(e) => {
+                          e.target.src = 'https://via.placeholder.com/64x64?text=Product';
+                        }}
+                      />
+                      <div>
+                        <p className="font-medium text-gray-900">{item.product?.name || 'Product'}</p>
+                        <p className="text-sm text-gray-600">Quantity: {item.quantity || 0}</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm text-gray-600">Price</p>
+                      <p className="font-semibold text-gray-900">₹{(item.price || 0).toFixed(2)} each</p>
+                      <p className="font-bold text-gray-900">₹{((item.quantity || 0) * (item.price || 0)).toFixed(2)} total</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 pt-4 border-t border-gray-200 flex justify-between">
+                <p className="text-lg font-semibold text-gray-900">Total Refund Amount</p>
+                <p className="text-2xl font-bold text-red-600">₹{selectedReturnRequest.totalAmount?.toFixed(2) || '0.00'}</p>
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex flex-wrap gap-3">
+              <button
+                onClick={() => {
+                  setSelectedReturnRequest(selectedReturnRequest);
+                  setReturnAction('approve');
+                  setShowReturnDetailsModal(false);
+                  setShowReturnActionModal(true);
+                }}
+                className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition flex items-center"
+              >
+                <ThumbsUp size={18} className="mr-2" />
+                Approve Return
+              </button>
+              <button
+                onClick={() => {
+                  setSelectedReturnRequest(selectedReturnRequest);
+                  setReturnAction('reject');
+                  setShowReturnDetailsModal(false);
+                  setShowReturnActionModal(true);
+                }}
+                className="px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition flex items-center"
+              >
+                <ThumbsDown size={18} className="mr-2" />
+                Reject Return
+              </button>
+              <a
+                href={`tel:${selectedReturnRequest.deliveryAddress?.phone || ''}`}
+                className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition flex items-center"
+              >
+                <PhoneCall size={18} className="mr-2" />
+                Call Customer
+              </a>
+              <a
+                href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                  `${selectedReturnRequest.deliveryAddress?.street || ''}, ${selectedReturnRequest.deliveryAddress?.city || ''}, ${selectedReturnRequest.deliveryAddress?.state || ''} ${selectedReturnRequest.deliveryAddress?.pincode || ''}`
+                )}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition flex items-center"
+              >
+                <Navigation size={18} className="mr-2" />
+                View on Map
+              </a>
+              <button
+                onClick={() => setShowReturnDetailsModal(false)}
+                className="px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition ml-auto"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Return Action Modal */}
+      {showReturnActionModal && selectedReturnRequest && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-8">
+            <div className="flex items-center space-x-3 mb-6">
+              {returnAction === 'approve' ? (
+                <ThumbsUp size={32} className="text-green-600" />
+              ) : (
+                <ThumbsDown size={32} className="text-red-600" />
+              )}
+              <h2 className="text-2xl font-bold text-gray-900">
+                {returnAction === 'approve' ? 'Approve' : 'Reject'} Return Request
+              </h2>
+            </div>
+
+            <p className="text-gray-600 mb-6">
+              You are about to <strong>{returnAction}</strong> the return request for Order #{selectedReturnRequest.orderNumber}.
+            </p>
+
+            {returnAction === 'approve' && (
+              <div className="space-y-4 mb-6">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Pickup Date *
+                  </label>
+                  <input
+                    type="date"
+                    value={returnPickupDate}
+                    onChange={(e) => setReturnPickupDate(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    min={new Date().toISOString().split('T')[0]}
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Pickup Time
+                  </label>
+                  <input
+                    type="time"
+                    value={returnPickupTime}
+                    onChange={(e) => setReturnPickupTime(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Notes {returnAction === 'reject' ? '* (Required for rejection)' : ''}
+              </label>
+              <textarea
+                value={returnNotes}
+                onChange={(e) => setReturnNotes(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                rows="3"
+                placeholder={returnAction === 'approve' ? 'Add any notes for the customer...' : 'Please provide a reason for rejection...'}
+                required={returnAction === 'reject'}
+              />
+            </div>
+
+            <div className="flex space-x-3">
+              <button
+                onClick={() => {
+                  setShowReturnActionModal(false);
+                  setReturnAction('approve');
+                  setReturnPickupDate('');
+                  setReturnPickupTime('');
+                  setReturnNotes('');
+                }}
+                className="flex-1 px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition"
+                disabled={processingAction}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleProcessReturnRequest}
+                disabled={processingAction || (returnAction === 'approve' && !returnPickupDate) || (returnAction === 'reject' && !returnNotes.trim())}
+                className="flex-1 px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center"
+              >
+                {processingAction ? (
+                  <>
+                    <Loader2 className="animate-spin mr-2" size={18} />
+                    Processing...
+                  </>
+                ) : (
+                  <>
+                    {returnAction === 'approve' ? 'Approve' : 'Reject'} Return
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -990,10 +1519,14 @@ function OrderDetailView({
   setSelectedOrder,
   setShowGenerateOTPModal,
   setShowVerifyOTPModal,
-  otpSentTo
+  otpSentTo,
+  setShowReturnModal,
+  formatDate
 }) {
   const steps = getStatusSteps(order.status);
   const hasOTPGenerated = order.deliveryOTP || order.otpGenerated;
+  const isReturnRequested = order.status === 'return_requested';
+  const returnStatus = order.returnRequest?.status;
 
   const handleStartDelivery = () => {
     if (window.confirm('Are you ready to start delivery?')) {
@@ -1010,7 +1543,6 @@ function OrderDetailView({
   const getAvailableActions = () => {
     const actions = [];
     
-    // CRITICAL FIX: Only show "Start Delivery" if order is in 'confirmed' status
     if (order.status === 'confirmed') {
       actions.push({
         label: 'Start Delivery',
@@ -1021,7 +1553,6 @@ function OrderDetailView({
       });
     }
     
-    // Only show "Near Location" if order is in 'out_for_delivery' status
     if (order.status === 'out_for_delivery') {
       actions.push({
         label: 'Near Location',
@@ -1032,9 +1563,7 @@ function OrderDetailView({
       });
     }
     
-    // Only show OTP actions if order is in 'near_location' status
     if (order.status === 'near_location') {
-      // Show Generate OTP button if OTP not generated yet
       if (!hasOTPGenerated) {
         actions.push({
           label: 'Generate OTP',
@@ -1045,7 +1574,6 @@ function OrderDetailView({
         });
       }
       
-      // Show Verify OTP button if OTP has been generated
       if (hasOTPGenerated) {
         actions.push({
           label: 'Verify OTP & Deliver',
@@ -1075,13 +1603,37 @@ function OrderDetailView({
             <div>
               <h2 className="text-2xl font-bold">Order #{order.orderNumber}</h2>
               <p className="text-blue-100">
-                Assigned on {new Date(order.assignedAt).toLocaleDateString('en-IN')}
+                {order.status === 'delivered' && order.deliveredAt 
+                  ? `Delivered on ${formatDate(order.deliveredAt)}`
+                  : order.assignedAt 
+                  ? `Assigned on ${formatDate(order.assignedAt)}`
+                  : `Placed on ${formatDate(order.createdAt)}`
+                }
               </p>
             </div>
           </div>
           {getStatusBadge(order.status)}
         </div>
       </div>
+
+      {/* Return Request Banner */}
+      {isReturnRequested && order.returnRequest && (
+        <div className="bg-red-50 p-4 border-b border-red-200">
+          <div className="flex items-center">
+            <RotateCcw size={20} className="text-red-600 mr-2" />
+            <div>
+              <p className="font-semibold text-red-800">RETURN REQUESTED</p>
+              <p className="text-sm text-red-700">
+                <strong>Reason:</strong> {order.returnRequest.reason || 'Not specified'} | 
+                <strong> Status:</strong> {returnStatus || 'pending'}
+                {order.returnRequest.pickupSchedule?.date && (
+                  <> | <strong> Pickup:</strong> {order.returnRequest.pickupSchedule.date} {order.returnRequest.pickupSchedule.time}</>
+                )}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Status Timeline */}
       <div className="p-6 border-b border-gray-200">
@@ -1135,10 +1687,10 @@ function OrderDetailView({
               <User size={20} className="text-blue-600" />
               <h4 className="font-semibold text-gray-900">Customer Details</h4>
             </div>
-            <p className="font-medium text-gray-900">{order.deliveryAddress.name}</p>
+            <p className="font-medium text-gray-900">{order.deliveryAddress?.name || 'N/A'}</p>
             <p className="text-gray-600 text-sm mt-2 flex items-center">
               <Phone size={14} className="mr-2" />
-              {order.deliveryAddress.phone}
+              {order.deliveryAddress?.phone || 'N/A'}
             </p>
           </div>
 
@@ -1147,16 +1699,16 @@ function OrderDetailView({
               <MapPin size={20} className="text-blue-600" />
               <h4 className="font-semibold text-gray-900">Delivery Address</h4>
             </div>
-            <p className="font-medium text-gray-900">{order.deliveryAddress.street}</p>
+            <p className="font-medium text-gray-900">{order.deliveryAddress?.street || 'N/A'}</p>
             <p className="text-gray-600 text-sm">
-              {order.deliveryAddress.city}, {order.deliveryAddress.state}
+              {order.deliveryAddress?.city || 'N/A'}, {order.deliveryAddress?.state || 'N/A'}
             </p>
-            <p className="text-gray-600 text-sm">{order.deliveryAddress.pincode}</p>
+            <p className="text-gray-600 text-sm">{order.deliveryAddress?.pincode || 'N/A'}</p>
           </div>
         </div>
       </div>
 
-      {/* OTP Status Section (Only shown when near_location) */}
+      {/* OTP Status Section */}
       {order.status === 'near_location' && (
         <div className="p-6 border-b border-gray-200 bg-purple-50">
           <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
@@ -1170,7 +1722,7 @@ function OrderDetailView({
                 <Shield size={32} className="text-green-600 mr-3" />
                 <div>
                   <p className="font-semibold text-green-800">OTP Sent to Customer</p>
-                  <p className="text-sm text-green-700">Phone: <span className="font-bold">{otpSentTo || order.deliveryAddress.phone}</span></p>
+                  <p className="text-sm text-green-700">Phone: <span className="font-bold">{otpSentTo || order.deliveryAddress?.phone || 'N/A'}</span></p>
                 </div>
               </div>
               <div className="bg-yellow-50 p-4 rounded border border-yellow-200">
@@ -1200,29 +1752,32 @@ function OrderDetailView({
 
       {/* Order Items */}
       <div className="p-6 border-b border-gray-200">
-        <h3 className="text-lg font-bold text-gray-900 mb-4">Items to Deliver ({order.items.length})</h3>
+        <h3 className="text-lg font-bold text-gray-900 mb-4">Items to Deliver ({order.items?.length || 0})</h3>
         <div className="space-y-3">
-          {order.items.map((item, idx) => (
+          {order.items?.map((item, idx) => (
             <div key={idx} className="flex items-center space-x-4 p-3 bg-gray-50 rounded-lg">
               <img
                 src={item.product?.image}
                 alt={item.product?.name}
                 className="w-16 h-16 object-cover rounded-lg"
+                onError={(e) => {
+                  e.target.src = 'https://via.placeholder.com/64x64?text=Product';
+                }}
               />
               <div className="flex-1">
-                <p className="font-medium text-gray-900">{item.product?.name}</p>
-                <p className="text-sm text-gray-600">Quantity: {item.quantity}</p>
-                <p className="text-sm text-gray-600">Price: ₹{item.price} each</p>
+                <p className="font-medium text-gray-900">{item.product?.name || 'Product'}</p>
+                <p className="text-sm text-gray-600">Quantity: {item.quantity || 0}</p>
+                <p className="text-sm text-gray-600">Price: ₹{item.price?.toFixed(2) || '0.00'} each</p>
               </div>
               <div className="text-right">
-                <p className="font-semibold text-gray-900">₹{item.quantity * item.price}</p>
+                <p className="font-semibold text-gray-900">₹{((item.quantity || 0) * (item.price || 0)).toFixed(2)}</p>
               </div>
             </div>
           ))}
         </div>
         <div className="mt-4 pt-4 border-t border-gray-200 flex justify-between">
           <p className="font-semibold text-gray-900">Total Amount</p>
-          <p className="text-2xl font-bold text-blue-600">₹{order.totalAmount.toLocaleString()}</p>
+          <p className="text-2xl font-bold text-blue-600">₹{order.totalAmount?.toLocaleString() || '0'}</p>
         </div>
       </div>
 
@@ -1248,7 +1803,7 @@ function OrderDetailView({
           {/* Navigation Button */}
           <a
             href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-              `${order.deliveryAddress.street}, ${order.deliveryAddress.city}, ${order.deliveryAddress.state} ${order.deliveryAddress.pincode}`
+              `${order.deliveryAddress?.street || ''}, ${order.deliveryAddress?.city || ''}, ${order.deliveryAddress?.state || ''} ${order.deliveryAddress?.pincode || ''}`
             )}`}
             target="_blank"
             rel="noopener noreferrer"
@@ -1273,17 +1828,30 @@ function OrderDetailView({
               <>
                 <li>You are near the delivery location</li>
                 <li>Click "Generate OTP" to send a verification OTP to the customer</li>
-                <li>The OTP will be sent to: {order.deliveryAddress.phone}</li>
+                <li>The OTP will be sent to: {order.deliveryAddress?.phone || 'N/A'}</li>
                 <li>Ask the customer for the OTP they received</li>
               </>
             )}
             {order.status === 'near_location' && hasOTPGenerated && (
               <>
-                <li>OTP has been sent to customer's phone: <strong>{otpSentTo || order.deliveryAddress.phone}</strong></li>
+                <li>OTP has been sent to customer's phone: <strong>{otpSentTo || order.deliveryAddress?.phone || 'N/A'}</strong></li>
                 <li>Ask the customer: "What is the OTP you received?"</li>
                 <li>Enter the OTP that the customer tells you</li>
                 <li>Click "Verify OTP & Deliver" to complete the delivery</li>
                 <li>System will verify if the OTP matches before completing delivery</li>
+              </>
+            )}
+            {order.status === 'delivered' && (
+              <>
+                <li>This order has been delivered successfully</li>
+                <li>Customer can request returns within 14 days of delivery</li>
+              </>
+            )}
+            {isReturnRequested && (
+              <>
+                <li>Return has been requested for this order</li>
+                <li>Check the return status above for details</li>
+                <li>Contact customer for pickup scheduling if approved</li>
               </>
             )}
           </ul>

@@ -246,7 +246,7 @@ const orderSchema = new mongoose.Schema({
   totalAmount: { type: Number, required: true },
   status: {
     type: String,
-    enum: ['pending', 'confirmed', 'processing', 'out_for_delivery', 'near_location', 'delivered', 'cancelled', 'returned'],
+    enum: ['pending', 'confirmed', 'processing', 'out_for_delivery', 'near_location', 'delivered', 'cancelled', 'returned', 'return_requested'],
     default: 'pending'
   },
   deliveryAddress: {
@@ -281,7 +281,25 @@ const orderSchema = new mongoose.Schema({
     requested: { type: Boolean, default: false },
     reason: { type: String },
     requestedAt: { type: Date },
-    status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' }
+    status: { 
+      type: String, 
+      enum: ['pending', 'approved', 'rejected', 'pickup_scheduled', 'picked_up', 'in_transit', 'received_at_warehouse', 'refund_initiated', 'refund_completed'],
+      default: 'pending' 
+    },
+    requestedBy: { type: String, enum: ['customer', 'delivery_partner'] },
+    customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    customerName: { type: String },
+    deliveryPartnerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    deliveryPartnerName: { type: String },
+    approvedAt: { type: Date },
+    rejectedAt: { type: Date },
+    pickupSchedule: {
+      date: { type: String },
+      time: { type: String },
+      notes: { type: String }
+    },
+    lastUpdated: { type: Date },
+    notes: { type: String }
   },
   paymentDetails: {
     transactionHash: { type: String },
@@ -1199,6 +1217,198 @@ apiRouter.get('/orders/:orderId/feedback', authenticateToken, async (req, res) =
   }
 });
 
+/* ===================== ORDER RETURN ROUTES (Customer Initiated) ===================== */
+
+apiRouter.post('/orders/:orderId/return', authenticateToken, async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { reason } = req.body;
+
+    console.log(`🔔 Return request for order ${orderId} from customer ${req.user.userId}`);
+
+    const order = await Order.findOne({ 
+      _id: orderId, 
+      customer: req.user.userId 
+    });
+
+    if (!order) {
+      console.log(`❌ Order ${orderId} not found for customer ${req.user.userId}`);
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    console.log(`📦 Order status: ${order.status}, Delivered at: ${order.deliveredAt}`);
+
+    if (order.status !== 'delivered') {
+      console.log(`❌ Order not delivered yet, status: ${order.status}`);
+      return res.status(400).json({ message: 'Can only return delivered orders' });
+    }
+
+    if (!order.deliveredAt) {
+      console.log(`❌ No delivery timestamp for order ${orderId}`);
+      return res.status(400).json({ message: 'Delivery information missing' });
+    }
+
+    const deliveredDate = new Date(order.deliveredAt);
+    const currentDate = new Date();
+    const daysDiff = Math.floor((currentDate - deliveredDate) / (1000 * 60 * 60 * 24));
+    
+    console.log(`📅 Days since delivery: ${daysDiff}, Delivered: ${deliveredDate}`);
+    
+    if (daysDiff > 14) {
+      console.log(`❌ Return period expired: ${daysDiff} days > 14 days`);
+      return res.status(400).json({ 
+        message: 'Return period has expired (14 days)',
+        deliveredAt: order.deliveredAt,
+        daysSinceDelivery: daysDiff
+      });
+    }
+
+    // Check if return already requested
+    if (order.returnRequest && order.returnRequest.requested) {
+      console.log(`ℹ️ Return already requested for order ${orderId}`);
+      return res.status(400).json({ 
+        message: 'Return request already submitted',
+        currentStatus: order.returnRequest.status 
+      });
+    }
+
+    // Update order return request
+    order.returnRequest = {
+      requested: true,
+      reason,
+      requestedAt: new Date(),
+      status: 'pending',
+      requestedBy: 'customer',
+      customerId: req.user.userId,
+      customerName: req.user.name || req.user.email
+    };
+
+    // Update order status
+    order.status = 'return_requested';
+
+    // Add to tracking history
+    order.trackingHistory.push({
+      status: 'return_requested',
+      message: `Return requested by customer: ${reason}`,
+      timestamp: new Date()
+    });
+
+    await order.save();
+
+    console.log(`✅ Return requested for order ${order.orderNumber} by customer ${req.user.email}`);
+
+    res.json({ 
+      message: 'Return request submitted successfully', 
+      order: {
+        _id: order._id,
+        orderNumber: order.orderNumber,
+        returnRequest: order.returnRequest,
+        status: order.status,
+        deliveredAt: order.deliveredAt
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error requesting return:', error);
+    res.status(500).json({ 
+      message: 'Failed to submit return request',
+      error: error.message 
+    });
+  }
+});
+
+apiRouter.post('/orders/:orderId/cancel-return', authenticateToken, async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+    const order = await Order.findOne({ 
+      _id: orderId, 
+      customer: req.user.userId 
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    if (!order.returnRequest || !order.returnRequest.requested) {
+      return res.status(400).json({ message: 'No return request found' });
+    }
+
+    if (order.returnRequest.status !== 'pending') {
+      return res.status(400).json({ 
+        message: `Cannot cancel return in ${order.returnRequest.status} status` 
+      });
+    }
+
+    // Clear return request
+    order.returnRequest = {
+      requested: false,
+      reason: null,
+      requestedAt: null,
+      status: null
+    };
+
+    // Restore order status to delivered
+    order.status = 'delivered';
+
+    order.trackingHistory.push({
+      status: 'return_cancelled',
+      message: 'Return request cancelled by customer',
+      timestamp: new Date()
+    });
+
+    await order.save();
+
+    console.log(`✅ Return cancelled for order ${order.orderNumber}`);
+
+    res.json({ 
+      message: 'Return request cancelled successfully', 
+      order 
+    });
+  } catch (error) {
+    console.error('❌ Error cancelling return:', error);
+    res.status(500).json({ message: 'Failed to cancel return request' });
+  }
+});
+
+apiRouter.get('/orders/:orderId/return-status', authenticateToken, async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+    const order = await Order.findOne({ 
+      _id: orderId, 
+      customer: req.user.userId 
+    }).select('orderNumber returnRequest status deliveredAt trackingHistory deliveryAddress items totalAmount');
+
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    // Calculate if return is eligible
+    let isReturnEligible = false;
+    if (order.status === 'delivered' && order.deliveredAt) {
+      const deliveredDate = new Date(order.deliveredAt);
+      const currentDate = new Date();
+      const daysDiff = Math.floor((currentDate - deliveredDate) / (1000 * 60 * 60 * 24));
+      isReturnEligible = daysDiff <= 14;
+    }
+
+    res.json({
+      orderNumber: order.orderNumber,
+      status: order.status,
+      deliveredAt: order.deliveredAt,
+      returnRequest: order.returnRequest || null,
+      isReturnEligible,
+      deliveryAddress: order.deliveryAddress,
+      items: order.items,
+      totalAmount: order.totalAmount,
+      returnTracking: order.trackingHistory ? order.trackingHistory.filter(t => t.status.includes('return')) : []
+    });
+  } catch (error) {
+    console.error('❌ Error fetching return status:', error);
+    res.status(500).json({ message: 'Failed to fetch return status' });
+  }
+});
+
 /* ===================== DELIVERY PARTNER ROUTES ===================== */
 
 apiRouter.get('/delivery/assignments', authenticateToken, async (req, res) => {
@@ -1267,7 +1477,12 @@ apiRouter.get('/delivery/stats', authenticateToken, async (req, res) => {
       status: { $in: ['confirmed', 'out_for_delivery', 'near_location'] }
     });
 
-    res.json({ totalDeliveries, completedToday, pending });
+    const returns = await Order.countDocuments({
+      deliveryPartner: req.user.userId,
+      status: 'return_requested'
+    });
+
+    res.json({ totalDeliveries, completedToday, pending, returns });
   } catch (error) {
     console.error('❌ Error fetching stats:', error);
     res.status(500).json({ message: 'Failed to fetch stats' });
@@ -1410,22 +1625,322 @@ apiRouter.put('/delivery/orders/:orderId/status', authenticateToken, async (req,
   }
 });
 
-apiRouter.post('/orders/:orderId/return', authenticateToken, async (req, res) => {
+/* ===================== DELIVERY PARTNER RETURN MANAGEMENT ===================== */
+
+// Delivery partner views customer return requests
+apiRouter.get('/delivery/return-requests', authenticateToken, async (req, res) => {
   try {
+    if (req.user.role !== 'delivery_partner') {
+      return res.status(403).json({ message: 'Access denied. Delivery partners only.' });
+    }
+
+    const returnRequests = await Order.find({
+      'returnRequest.requested': true,
+      'returnRequest.status': 'pending',
+      deliveryPartner: req.user.userId
+    })
+      .populate('customer', 'name email phone')
+      .select('orderNumber deliveryAddress items totalAmount deliveredAt returnRequest trackingHistory')
+      .sort({ 'returnRequest.requestedAt': -1 });
+
+    console.log(`✅ Found ${returnRequests.length} return requests for delivery partner ${req.user.userId}`);
+
+    res.json(returnRequests);
+  } catch (error) {
+    console.error('❌ Error fetching return requests:', error);
+    res.status(500).json({ 
+      message: 'Failed to fetch return requests',
+      error: error.message 
+    });
+  }
+});
+
+// Delivery partner processes return (approve/reject)
+apiRouter.post('/delivery/orders/:orderId/process-return', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'delivery_partner') {
+      return res.status(403).json({ message: 'Access denied. Delivery partners only.' });
+    }
+
     const { orderId } = req.params;
-    const { reason } = req.body;
+    const { action, pickupDate, pickupTime, notes } = req.body; // action: 'approve' or 'reject'
+
+    if (!action || !['approve', 'reject'].includes(action)) {
+      return res.status(400).json({ message: 'Invalid action. Must be "approve" or "reject".' });
+    }
 
     const order = await Order.findOne({ 
-      _id: orderId, 
-      customer: req.user.userId 
+      _id: orderId,
+      deliveryPartner: req.user.userId 
     });
 
     if (!order) {
-      return res.status(404).json({ message: 'Order not found' });
+      return res.status(404).json({ message: 'Order not found or not assigned to you' });
+    }
+
+    if (!order.returnRequest || !order.returnRequest.requested) {
+      return res.status(400).json({ message: 'No return request found for this order' });
+    }
+
+    if (order.returnRequest.status !== 'pending') {
+      return res.status(400).json({ 
+        message: `Return request is already ${order.returnRequest.status}` 
+      });
+    }
+
+    const deliveryPartner = await User.findById(req.user.userId);
+
+    if (action === 'approve') {
+      // Approve the return
+      order.returnRequest.status = 'approved';
+      order.returnRequest.approvedAt = new Date();
+      order.returnRequest.approvedBy = {
+        deliveryPartnerId: req.user.userId,
+        deliveryPartnerName: deliveryPartner.name
+      };
+      
+      if (pickupDate) {
+        order.returnRequest.pickupSchedule = {
+          date: pickupDate,
+          time: pickupTime || '9:00 AM - 6:00 PM',
+          notes: notes || ''
+        };
+      }
+
+      order.trackingHistory.push({
+        status: 'return_approved',
+        message: `Return approved by delivery partner ${deliveryPartner.name}. Pickup scheduled${pickupDate ? ` for ${pickupDate}` : ''}.`,
+        timestamp: new Date(),
+        deliveryPartner: {
+          name: deliveryPartner.name,
+          phone: deliveryPartner.email
+        }
+      });
+
+      console.log(`✅ Return approved for order ${order.orderNumber} by ${deliveryPartner.name}`);
+
+    } else if (action === 'reject') {
+      // Reject the return
+      order.returnRequest.status = 'rejected';
+      order.returnRequest.rejectedAt = new Date();
+      order.returnRequest.rejectedBy = {
+        deliveryPartnerId: req.user.userId,
+        deliveryPartnerName: deliveryPartner.name
+      };
+      order.returnRequest.rejectionNotes = notes || '';
+
+      // Restore order status to delivered
+      order.status = 'delivered';
+
+      order.trackingHistory.push({
+        status: 'return_rejected',
+        message: `Return rejected by delivery partner ${deliveryPartner.name}. Reason: ${notes || 'Not specified'}`,
+        timestamp: new Date(),
+        deliveryPartner: {
+          name: deliveryPartner.name,
+          phone: deliveryPartner.email
+        }
+      });
+
+      console.log(`❌ Return rejected for order ${order.orderNumber} by ${deliveryPartner.name}`);
+    }
+
+    await order.save();
+
+    res.json({ 
+      message: `Return request ${action}ed successfully`,
+      order,
+      returnRequest: order.returnRequest
+    });
+  } catch (error) {
+    console.error('❌ Error processing return:', error);
+    res.status(500).json({ 
+      message: 'Failed to process return',
+      error: error.message 
+    });
+  }
+});
+
+// Delivery partner updates return status (picked up, in transit, received, etc.)
+apiRouter.put('/delivery/orders/:orderId/return-status', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'delivery_partner') {
+      return res.status(403).json({ message: 'Access denied. Delivery partners only.' });
+    }
+
+    const { orderId } = req.params;
+    const { status, notes } = req.body;
+
+    const validStatuses = ['pickup_scheduled', 'picked_up', 'in_transit', 'received_at_warehouse', 'refund_initiated', 'refund_completed'];
+    
+    if (!status || !validStatuses.includes(status)) {
+      return res.status(400).json({ 
+        message: `Invalid status. Must be one of: ${validStatuses.join(', ')}` 
+      });
+    }
+
+    const order = await Order.findOne({ 
+      _id: orderId,
+      deliveryPartner: req.user.userId 
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found or not assigned to you' });
+    }
+
+    if (!order.returnRequest || !order.returnRequest.requested) {
+      return res.status(400).json({ message: 'No return request found for this order' });
+    }
+
+    if (order.returnRequest.status !== 'approved' && !['pickup_scheduled', 'picked_up'].includes(order.returnRequest.status)) {
+      return res.status(400).json({ 
+        message: 'Return must be approved before updating status' 
+      });
+    }
+
+    const deliveryPartner = await User.findById(req.user.userId);
+
+    // Update return status
+    order.returnRequest.status = status;
+    order.returnRequest.lastUpdated = new Date();
+    order.returnRequest.notes = notes || order.returnRequest.notes;
+
+    // Add to tracking history
+    const statusMessages = {
+      'pickup_scheduled': 'Pickup scheduled for return',
+      'picked_up': 'Return item picked up from customer',
+      'in_transit': 'Return item in transit to warehouse',
+      'received_at_warehouse': 'Return item received at warehouse',
+      'refund_initiated': 'Refund initiated for customer',
+      'refund_completed': 'Refund completed successfully'
+    };
+
+    order.trackingHistory.push({
+      status: `return_${status}`,
+      message: `${statusMessages[status] || status.replace('_', ' ')}${notes ? ` - ${notes}` : ''}`,
+      timestamp: new Date(),
+      deliveryPartner: {
+        name: deliveryPartner.name,
+        phone: deliveryPartner.email
+      }
+    });
+
+    // If refund completed, update order status
+    if (status === 'refund_completed') {
+      order.status = 'returned';
+      order.trackingHistory.push({
+        status: 'returned',
+        message: 'Order returned and refund completed',
+        timestamp: new Date()
+      });
+    }
+
+    await order.save();
+
+    console.log(`✅ Return status updated to ${status} for order ${order.orderNumber}`);
+
+    res.json({ 
+      message: 'Return status updated successfully',
+      order,
+      returnRequest: order.returnRequest
+    });
+  } catch (error) {
+    console.error('❌ Error updating return status:', error);
+    res.status(500).json({ 
+      message: 'Failed to update return status',
+      error: error.message 
+    });
+  }
+});
+
+// Get detailed return information
+apiRouter.get('/delivery/orders/:orderId/return-details', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'delivery_partner') {
+      return res.status(403).json({ message: 'Access denied. Delivery partners only.' });
+    }
+
+    const { orderId } = req.params;
+
+    const order = await Order.findOne({ 
+      _id: orderId,
+      deliveryPartner: req.user.userId 
+    })
+      .populate('customer', 'name email phone')
+      .select('orderNumber deliveryAddress items totalAmount deliveredAt returnRequest trackingHistory');
+
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found or not assigned to you' });
+    }
+
+    if (!order.returnRequest || !order.returnRequest.requested) {
+      return res.status(404).json({ message: 'No return request found for this order' });
+    }
+
+    // Calculate days since delivery
+    let daysSinceDelivery = null;
+    if (order.deliveredAt) {
+      const deliveredDate = new Date(order.deliveredAt);
+      const currentDate = new Date();
+      daysSinceDelivery = Math.floor((currentDate - deliveredDate) / (1000 * 60 * 60 * 24));
+    }
+
+    res.json({
+      orderDetails: {
+        orderNumber: order.orderNumber,
+        customer: {
+          name: order.customer?.name || order.deliveryAddress.name,
+          email: order.customer?.email || 'N/A',
+          phone: order.customer?.phone || order.deliveryAddress.phone
+        },
+        address: order.deliveryAddress,
+        items: order.items,
+        totalAmount: order.totalAmount,
+        deliveredAt: order.deliveredAt,
+        daysSinceDelivery: daysSinceDelivery
+      },
+      returnRequest: order.returnRequest,
+      trackingHistory: order.trackingHistory.filter(t => t.status.includes('return'))
+    });
+  } catch (error) {
+    console.error('❌ Error fetching return details:', error);
+    res.status(500).json({ 
+      message: 'Failed to fetch return details',
+      error: error.message 
+    });
+  }
+});
+
+// Delivery partner can also initiate return (for damaged items during delivery, etc.)
+apiRouter.post('/delivery/orders/:orderId/initiate-return', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'delivery_partner') {
+      return res.status(403).json({ message: 'Access denied. Delivery partners only.' });
+    }
+
+    const { orderId } = req.params;
+    const { reason, notes } = req.body;
+
+    if (!reason) {
+      return res.status(400).json({ message: 'Reason is required' });
+    }
+
+    const order = await Order.findOne({ 
+      _id: orderId,
+      deliveryPartner: req.user.userId 
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found or not assigned to you' });
     }
 
     if (order.status !== 'delivered') {
-      return res.status(400).json({ message: 'Can only return delivered orders' });
+      return res.status(400).json({ message: 'Only delivered orders can be returned' });
+    }
+
+    // Check return window (14 days)
+    if (!order.deliveredAt) {
+      return res.status(400).json({ message: 'Delivery information missing' });
     }
 
     const deliveredDate = new Date(order.deliveredAt);
@@ -1433,30 +1948,64 @@ apiRouter.post('/orders/:orderId/return', authenticateToken, async (req, res) =>
     const daysDiff = Math.floor((currentDate - deliveredDate) / (1000 * 60 * 60 * 24));
     
     if (daysDiff > 14) {
-      return res.status(400).json({ message: 'Return period has expired (14 days)' });
+      return res.status(400).json({ message: 'Return period has expired (14 days from delivery)' });
     }
 
+    // Check if return already requested
+    if (order.returnRequest && order.returnRequest.requested) {
+      return res.status(400).json({ 
+        message: 'Return request already exists for this order' 
+      });
+    }
+
+    const deliveryPartner = await User.findById(req.user.userId);
+
+    // Create return request initiated by delivery partner
     order.returnRequest = {
       requested: true,
       reason,
       requestedAt: new Date(),
-      status: 'pending'
+      status: 'approved', // Auto-approve when initiated by delivery partner
+      requestedBy: 'delivery_partner',
+      deliveryPartnerId: req.user.userId,
+      deliveryPartnerName: deliveryPartner.name,
+      approvedAt: new Date(),
+      approvedBy: {
+        deliveryPartnerId: req.user.userId,
+        deliveryPartnerName: deliveryPartner.name
+      },
+      notes: notes || ''
     };
 
+    // Update order status
+    order.status = 'return_requested';
+
+    // Add to tracking history
     order.trackingHistory.push({
       status: 'return_requested',
-      message: `Return requested: ${reason}`,
-      timestamp: new Date()
+      message: `Return initiated by delivery partner: ${reason}`,
+      timestamp: new Date(),
+      deliveryPartner: {
+        name: deliveryPartner.name,
+        phone: deliveryPartner.email
+      }
     });
 
     await order.save();
 
-    console.log(`✅ Return requested for order ${order.orderNumber}`);
+    console.log(`✅ Return initiated for order ${order.orderNumber} by delivery partner ${deliveryPartner.name}`);
 
-    res.json({ message: 'Return request submitted successfully', order });
+    res.json({ 
+      message: 'Return initiated successfully',
+      order,
+      returnRequest: order.returnRequest
+    });
   } catch (error) {
-    console.error('❌ Error requesting return:', error);
-    res.status(500).json({ message: 'Failed to submit return request' });
+    console.error('❌ Error initiating return:', error);
+    res.status(500).json({ 
+      message: 'Failed to initiate return',
+      error: error.message 
+    });
   }
 });
 
