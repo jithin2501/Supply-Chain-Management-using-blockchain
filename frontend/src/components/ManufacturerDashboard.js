@@ -3,7 +3,7 @@ import {
   Factory, Package, ShoppingCart, LogOut, Building2, 
   Truck, Star, ArrowRight, ArrowLeft, ChevronRight, 
   Boxes, ShieldCheck, Cpu, Database, CheckCircle2, History, Link as LinkIcon, Clock, Wallet, AlertCircle, RefreshCw,
-  MapPin, Globe, ExternalLink, X, Plus, Minus
+  MapPin, Globe, ExternalLink, X, Plus, Minus, DollarSign, TrendingUp, Receipt, BarChart, Filter, Calendar
 } from 'lucide-react';
 
 const API_URL = 'http://localhost:5000/api';
@@ -32,7 +32,17 @@ export default function ManufacturerDashboard() {
   const [purchases, setPurchases] = useState([]);
   const [boughtMaterials, setBoughtMaterials] = useState([]);
   const [manufacturedProducts, setManufacturedProducts] = useState([]);
+  const [revenueData, setRevenueData] = useState([]);
+  const [revenueStats, setRevenueStats] = useState({
+    totalRevenue: 0,
+    totalOrders: 0,
+    averageOrderValue: 0,
+    productsSold: 0,
+    monthlyRevenue: 0,
+    pendingAmount: 0
+  });
   const [loading, setLoading] = useState(true);
+  const [revenueLoading, setRevenueLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('marketplace');
   const [selectedSupplierId, setSelectedSupplierId] = useState(null);
   
@@ -48,11 +58,12 @@ export default function ManufacturerDashboard() {
     name: '',
     description: '',
     quantity: '',
-    price: ''
+    price: '',
+    quantityUsed: '1'
   });
   const [manufactureImage, setManufactureImage] = useState(null);
   
-  // NEW: Combine materials modal state
+  // Combine materials modal state
   const [showCombineModal, setShowCombineModal] = useState(false);
   const [selectedMaterialsForCombine, setSelectedMaterialsForCombine] = useState([]);
   const [combineFormData, setCombineFormData] = useState({
@@ -61,7 +72,16 @@ export default function ManufacturerDashboard() {
     quantity: '',
     price: ''
   });
+  const [combineQuantities, setCombineQuantities] = useState({});
   const [combineImage, setCombineImage] = useState(null);
+  
+  // Revenue filters
+  const [revenueFilters, setRevenueFilters] = useState({
+    timeRange: 'all',
+    productFilter: 'all',
+    statusFilter: 'all',
+    sortBy: 'date_desc'
+  });
   
   // Wallet State
   const [account, setAccount] = useState(null);
@@ -134,62 +154,62 @@ export default function ManufacturerDashboard() {
       checkInitialConnection();
       
       return () => {
-        window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
+        if (window.ethereum.removeListener) {
+          window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
+        }
       };
     }
   }, [user._id]);
 
-  // Force clean connection function
-  const forceCleanConnect = async () => {
-    if (!window.ethereum) {
-      alert("Please install MetaMask!");
-      return;
-    }
-    
-    setIsConnecting(true);
+  // Fetch revenue data
+  const fetchRevenueData = useCallback(async () => {
+    setRevenueLoading(true);
     try {
-      // First, try to revoke any existing permissions
-      try {
-        await window.ethereum.request({
-          method: 'wallet_revokePermissions',
-          params: [{ eth_accounts: {} }]
-        });
-      } catch (revokeErr) {
-        console.log("No permissions to revoke or revocation failed:", revokeErr);
-      }
-      
-      // Clear any cached state
-      setAccount(null);
-      localStorage.removeItem(`wallet_${user._id}`);
-      
-      // Wait a moment for cleanup
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // Now request fresh connection - this should show account selection
-      const accounts = await window.ethereum.request({ 
-        method: 'eth_requestAccounts' 
+      const response = await fetch(`${API_URL}/manufacturer/revenue`, {
+        headers: { 'Authorization': `Bearer ${token}` }
       });
       
-      if (accounts.length > 0) {
-        const connectedAccount = accounts[0];
-        setAccount(connectedAccount);
-        localStorage.setItem(`wallet_${user._id}`, connectedAccount);
-        setForceReconnect(false);
+      if (!response.ok) {
+        throw new Error('Failed to fetch revenue data');
       }
-    } catch (err) {
-      console.error("Wallet connection failed:", err);
       
-      if (err.code === 4001) {
-        // User rejected the connection request
-        alert("Connection rejected. Please accept the connection request in MetaMask.");
-      } else if (err.code === -32002) {
-        // Request already pending
-        alert("Connection request already pending. Please check your MetaMask extension.");
-      } else {
-        alert("Failed to connect wallet. Please make sure MetaMask is installed and unlocked.");
-      }
+      const data = await response.json();
+      setRevenueData(data.receipts || []);
+      setRevenueStats(data.stats || {
+        totalRevenue: 0,
+        totalOrders: 0,
+        averageOrderValue: 0,
+        productsSold: 0,
+        monthlyRevenue: 0,
+        pendingAmount: 0
+      });
+      
+      console.log('💰 Revenue data loaded:', data.stats);
+    } catch (err) {
+      console.error('❌ Error loading revenue data:', err);
     } finally {
-      setIsConnecting(false);
+      setRevenueLoading(false);
+    }
+  }, [token]);
+
+  // Fetch revenue with filters
+  const fetchFilteredRevenue = async (filters) => {
+    setRevenueLoading(true);
+    try {
+      const queryParams = new URLSearchParams(filters).toString();
+      const response = await fetch(`${API_URL}/manufacturer/revenue?${queryParams}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      if (!response.ok) throw new Error('Failed to fetch filtered revenue');
+      
+      const data = await response.json();
+      setRevenueData(data.receipts || []);
+      setRevenueStats(data.stats || revenueStats);
+    } catch (err) {
+      console.error('❌ Error loading filtered revenue:', err);
+    } finally {
+      setRevenueLoading(false);
     }
   };
 
@@ -298,6 +318,7 @@ export default function ManufacturerDashboard() {
     }
   };
 
+  // Add the missing switchAccount function
   const switchAccount = async () => {
     if (!window.ethereum) return;
     
@@ -325,6 +346,60 @@ export default function ManufacturerDashboard() {
     }
   };
 
+  // Add the missing forceCleanConnect function
+  const forceCleanConnect = async () => {
+    if (!window.ethereum) {
+      alert("Please install MetaMask!");
+      return;
+    }
+    
+    setIsConnecting(true);
+    try {
+      // First, try to revoke any existing permissions
+      try {
+        await window.ethereum.request({
+          method: 'wallet_revokePermissions',
+          params: [{ eth_accounts: {} }]
+        });
+      } catch (revokeErr) {
+        console.log("No permissions to revoke or revocation failed:", revokeErr);
+      }
+      
+      // Clear any cached state
+      setAccount(null);
+      localStorage.removeItem(`wallet_${user._id}`);
+      
+      // Wait a moment for cleanup
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Now request fresh connection - this should show account selection
+      const accounts = await window.ethereum.request({ 
+        method: 'eth_requestAccounts' 
+      });
+      
+      if (accounts.length > 0) {
+        const connectedAccount = accounts[0];
+        setAccount(connectedAccount);
+        localStorage.setItem(`wallet_${user._id}`, connectedAccount);
+        setForceReconnect(false);
+      }
+    } catch (err) {
+      console.error("Wallet connection failed:", err);
+      
+      if (err.code === 4001) {
+        // User rejected the connection request
+        alert("Connection rejected. Please accept the connection request in MetaMask.");
+      } else if (err.code === -32002) {
+        // Request already pending
+        alert("Connection request already pending. Please check your MetaMask extension.");
+      } else {
+        alert("Failed to connect wallet. Please make sure MetaMask is installed and unlocked.");
+      }
+    } finally {
+      setIsConnecting(false);
+    }
+  };
+
   const fetchMaterials = useCallback(async () => {
     console.log('🔄 Fetching materials for manufacturer:', user._id);
     try {
@@ -338,6 +413,7 @@ export default function ManufacturerDashboard() {
     } catch (err) {
       console.error('Error loading marketplace:', err);
       setPurchaseError('Failed to load marketplace. Please try again.');
+      setMaterials([]); // Ensure materials is always an array
     } finally {
       setLoading(false);
     }
@@ -390,10 +466,19 @@ export default function ManufacturerDashboard() {
       fetchBoughtMaterials();
     } else if (activeTab === 'products') {
       fetchManufacturedProducts();
-    } else {
+    } else if (activeTab === 'orders') {
       fetchPurchases();
+    } else if (activeTab === 'revenue') {
+      fetchRevenueData();
     }
-  }, [activeTab, fetchMaterials, fetchPurchases, fetchBoughtMaterials, fetchManufacturedProducts]);
+  }, [activeTab, fetchMaterials, fetchPurchases, fetchBoughtMaterials, fetchManufacturedProducts, fetchRevenueData]);
+
+  // Filter revenue data
+  useEffect(() => {
+    if (activeTab === 'revenue') {
+      fetchFilteredRevenue(revenueFilters);
+    }
+  }, [revenueFilters, activeTab]);
 
   // Function to get Google Maps URL
   const getGoogleMapsUrl = (lat, lng, address) => {
@@ -410,6 +495,7 @@ export default function ManufacturerDashboard() {
     setShowPurchaseModal(true);
   };
 
+  // Keep the existing handleBuy function
   const handleBuy = async () => {
     if (!account || !selectedProduct) {
       alert("Please connect your MetaMask wallet first!");
@@ -463,8 +549,7 @@ export default function ManufacturerDashboard() {
       const transactionParameters = {
         to: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8', // Replace with actual supplier's wallet
         from: currentAccount,
-        // eslint-disable-next-line no-undef
-        value: '0x' + BigInt(weiAmount).toString(16),
+        value: '0x' + (weiAmount).toString(16),
         gas: '0x5208', // 21000 gas for simple transfer
       };
 
@@ -582,81 +667,95 @@ export default function ManufacturerDashboard() {
     }
   };
 
-  const handleManufactureProduct = async (e) => {
-    e.preventDefault();
+ const handleManufactureProduct = async (e) => {
+  e.preventDefault();
+  
+  if (!manufactureImage) {
+    alert('Please upload a product image');
+    return;
+  }
+  
+  if (!selectedMaterial) {
+    alert('No material selected');
+    return;
+  }
+  
+  if (!manufactureFormData.quantityUsed || parseInt(manufactureFormData.quantityUsed) <= 0) {
+    alert('Please specify how many units to use from this material');
+    return;
+  }
+  
+  if (parseInt(manufactureFormData.quantityUsed) > selectedMaterial.quantity) {
+    alert(`Cannot use more than ${selectedMaterial.quantity} units (available)`);
+    return;
+  }
+  
+  console.log('🔍 Debug - Starting manufacture product:');
+  console.log('Selected material:', selectedMaterial);
+  console.log('Form data:', manufactureFormData);
+  console.log('Image file:', manufactureImage);
+  
+  setLoading(true);
+  
+  try {
+    const formData = new FormData();
+    formData.append('name', manufactureFormData.name);
+    formData.append('description', manufactureFormData.description);
+    formData.append('quantity', manufactureFormData.quantity);
+    formData.append('price', manufactureFormData.price);
+    formData.append('materialId', selectedMaterial._id);
+    formData.append('quantityUsed', manufactureFormData.quantityUsed);
+    formData.append('image', manufactureImage);
     
-    if (!manufactureImage) {
-      alert('Please upload a product image');
-      return;
+    console.log('📤 Sending request to:', `${API_URL}/manufacturer/create-product`);
+    console.log('FormData entries:');
+    for (let pair of formData.entries()) {
+      console.log(pair[0] + ': ', pair[1]);
     }
     
-    if (!selectedMaterial) {
-      alert('No material selected');
-      return;
+    const response = await fetch(`${API_URL}/manufacturer/create-product`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
+      body: formData
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      console.error('❌ Backend error response:', error);
+      throw new Error(error.message || 'Failed to create product');
     }
     
-    console.log('🔍 Debug - Starting manufacture product:');
-    console.log('Selected material:', selectedMaterial);
-    console.log('Form data:', manufactureFormData);
-    console.log('Image file:', manufactureImage);
+    const result = await response.json();
+    console.log('✅ Product manufactured successfully:', result);
     
-    setLoading(true);
+    // FIXED: Handle the response more safely
+    const remainingUnits = result.material?.remaining || 
+                         (selectedMaterial.quantity - parseInt(manufactureFormData.quantityUsed));
     
-    try {
-      const formData = new FormData();
-      formData.append('name', manufactureFormData.name);
-      formData.append('description', manufactureFormData.description);
-      formData.append('quantity', manufactureFormData.quantity);
-      formData.append('price', manufactureFormData.price);
-      formData.append('materialId', selectedMaterial._id);
-      formData.append('image', manufactureImage);
-      
-      console.log('📤 Sending request to:', `${API_URL}/manufacturer/create-product`);
-      console.log('FormData entries:');
-      for (let pair of formData.entries()) {
-        console.log(pair[0] + ': ', pair[1]);
-      }
-      
-      const response = await fetch(`${API_URL}/manufacturer/create-product`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        body: formData
-      });
-      
-      if (!response.ok) {
-        const error = await response.json();
-        console.error('❌ Backend error response:', error);
-        throw new Error(error.message || 'Failed to create product');
-      }
-      
-      const newProduct = await response.json();
-      console.log('✅ Product manufactured successfully:', newProduct);
-      
-      alert(`✅ Successfully created "${manufactureFormData.name}"!`);
-      
-      // Reset form and close modal
-      setShowManufactureModal(false);
-      setManufactureFormData({ name: '', description: '', quantity: '', price: '' });
-      setManufactureImage(null);
-      setSelectedMaterial(null);
-      
-      // Refresh data
-      await fetchBoughtMaterials();
-      await fetchManufacturedProducts();
-      
-    } catch (err) {
-      console.error('❌ Error manufacturing product:', err);
-      console.error('❌ Full error object:', err);
-      console.error('❌ Error message:', err.message);
-      alert(`❌ ${err.message || 'Failed to create product'}`);
-    } finally {
-      setLoading(false);
-    }
-  };
+    alert(`✅ Successfully created "${manufactureFormData.name}" using ${manufactureFormData.quantityUsed} units!${remainingUnits > 0 ? ` ${remainingUnits} units remaining.` : ''}`);
+    
+    // Reset form and close modal
+    setShowManufactureModal(false);
+    setManufactureFormData({ name: '', description: '', quantity: '', price: '', quantityUsed: '1' });
+    setManufactureImage(null);
+    setSelectedMaterial(null);
+    
+    // Refresh data
+    await fetchBoughtMaterials();
+    await fetchManufacturedProducts();
+    
+  } catch (err) {
+    console.error('❌ Error manufacturing product:', err);
+    console.error('❌ Full error object:', err);
+    console.error('❌ Error message:', err.message);
+    alert(`❌ ${err.message || 'Failed to create product'}`);
+  } finally {
+    setLoading(false);
+  }
+};
 
-  // UPDATED: Handle combining materials to create product
   const handleCombineMaterials = async (e) => {
     e.preventDefault();
     
@@ -672,6 +771,26 @@ export default function ManufacturerDashboard() {
       return;
     }
     
+    // Validate all quantities
+    const quantities = selectedMaterialsForCombine.map(material => 
+      combineQuantities[material._id] || 0
+    );
+    
+    for (let i = 0; i < selectedMaterialsForCombine.length; i++) {
+      const material = selectedMaterialsForCombine[i];
+      const quantityUsed = quantities[i];
+      
+      if (!quantityUsed || quantityUsed <= 0) {
+        alert(`Please specify quantity to use for ${material.productName}`);
+        return;
+      }
+      
+      if (quantityUsed > material.quantity) {
+        alert(`Cannot use ${quantityUsed} units of ${material.productName}. Available: ${material.quantity}`);
+        return;
+      }
+    }
+
     // Validate form data
     if (!combineFormData.name || !combineFormData.description || 
         !combineFormData.quantity || !combineFormData.price) {
@@ -681,6 +800,7 @@ export default function ManufacturerDashboard() {
 
     console.log('🔍 Combine materials details:');
     console.log('Selected materials:', selectedMaterialsForCombine);
+    console.log('Quantities used:', quantities);
     console.log('Form data:', combineFormData);
     console.log('Image file:', combineImage);
 
@@ -693,6 +813,7 @@ export default function ManufacturerDashboard() {
       formData.append('quantity', combineFormData.quantity);
       formData.append('price', combineFormData.price);
       formData.append('materialIds', JSON.stringify(selectedMaterialsForCombine.map(m => m._id)));
+      formData.append('quantitiesUsed', JSON.stringify(quantities));
       formData.append('image', combineImage);
 
       console.log('📤 Sending request to:', `${API_URL}/manufacturer/manufacture-combined`);
@@ -727,6 +848,7 @@ export default function ManufacturerDashboard() {
       setShowCombineModal(false);
       setSelectedMaterialsForCombine([]);
       setCombineFormData({ name: '', description: '', quantity: '', price: '' });
+      setCombineQuantities({});
       setCombineImage(null);
       
       // Refresh data
@@ -745,20 +867,40 @@ export default function ManufacturerDashboard() {
     }
   };
 
-  // Toggle material selection for combining
   const toggleMaterialSelection = (material) => {
     setSelectedMaterialsForCombine(prev => {
       const exists = prev.find(m => m._id === material._id);
       if (exists) {
+        // Remove from selection and clear its quantity
+        setCombineQuantities(prevQuantities => {
+          const newQuantities = { ...prevQuantities };
+          delete newQuantities[material._id];
+          return newQuantities;
+        });
         return prev.filter(m => m._id !== material._id);
       } else {
         if (prev.length >= 3) {
           alert('You can only combine up to 3 materials');
           return prev;
         }
+        // Add to selection with default quantity of 1
+        setCombineQuantities(prevQuantities => ({
+          ...prevQuantities,
+          [material._id]: 1
+        }));
         return [...prev, material];
       }
     });
+  };
+
+  const updateCombineQuantity = (materialId, quantity) => {
+    setCombineQuantities(prev => ({
+      ...prev,
+      [materialId]: Math.max(1, Math.min(
+        selectedMaterialsForCombine.find(m => m._id === materialId)?.quantity || 1,
+        quantity
+      ))
+    }));
   };
 
   const handleLogout = () => {
@@ -768,7 +910,51 @@ export default function ManufacturerDashboard() {
     window.location.href = '/login';
   };
 
-  const groupedMaterials = materials.reduce((acc, item) => {
+  // Revenue filter handlers
+  const handleTimeRangeChange = (range) => {
+    setRevenueFilters(prev => ({ ...prev, timeRange: range }));
+  };
+
+  const handleProductFilterChange = (productId) => {
+    setRevenueFilters(prev => ({ ...prev, productFilter: productId }));
+  };
+
+  const handleStatusFilterChange = (status) => {
+    setRevenueFilters(prev => ({ ...prev, statusFilter: status }));
+  };
+
+  const handleSortChange = (sortBy) => {
+    setRevenueFilters(prev => ({ ...prev, sortBy }));
+  };
+
+  const formatCurrency = (amount) => {
+    return new Intl.NumberFormat('en-IN', {
+      style: 'currency',
+      currency: 'INR',
+      minimumFractionDigits: 2
+    }).format(amount);
+  };
+
+  const formatDate = (dateString) => {
+    return new Date(dateString).toLocaleDateString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'delivered': return 'bg-green-100 text-green-800';
+      case 'pending': return 'bg-yellow-100 text-yellow-800';
+      case 'returned': return 'bg-red-100 text-red-800';
+      default: return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  const groupedMaterials = Array.isArray(materials) ? materials.reduce((acc, item) => {
     const supplierKey = item.supplierId;
     if (!acc[supplierKey]) {
       acc[supplierKey] = {
@@ -780,12 +966,14 @@ export default function ManufacturerDashboard() {
     }
     acc[supplierKey].items.push(item);
     return acc;
-  }, {});
+  }, {}) : {};
 
   const selectedSupplier = selectedSupplierId ? groupedMaterials[selectedSupplierId] : null;
 
-  // Filter available materials for combining (only 'available' status)
-  const availableMaterialsForCombine = boughtMaterials.filter(m => m.status === 'available');
+  // Filter available materials for combining (only 'available' status and quantity > 0)
+  const availableMaterialsForCombine = Array.isArray(boughtMaterials) 
+    ? boughtMaterials.filter(m => m.status === 'available' && m.quantity > 0)
+    : [];
 
   return (
     <div className="min-h-screen bg-gray-50 flex">
@@ -824,6 +1012,13 @@ export default function ManufacturerDashboard() {
             >
               <History size={20} />
               <span>Blockchain Ledger</span>
+            </button>
+            <button 
+              onClick={() => setActiveTab('revenue')} 
+              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition font-medium ${activeTab === 'revenue' ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-600 hover:bg-gray-50'}`}
+            >
+              <DollarSign size={20} />
+              <span>Revenue & Receipts</span>
             </button>
           </nav>
 
@@ -917,13 +1112,17 @@ export default function ManufacturerDashboard() {
                 {activeTab === 'marketplace' ? (selectedSupplier && selectedSupplier.company ? selectedSupplier.company : 'Supplier Marketplace') : 
                  activeTab === 'bought' ? 'Bought Materials' :
                  activeTab === 'products' ? 'My Products' :
-                 'Blockchain Transaction Ledger'}
+                 activeTab === 'orders' ? 'Blockchain Transaction Ledger' :
+                 activeTab === 'revenue' ? 'Revenue & Receipts' :
+                 'Dashboard'}
               </h2>
               <p className="text-gray-500">
                 {activeTab === 'marketplace' ? 'Real-time Web3 sourcing with MetaMask integration.' : 
                  activeTab === 'bought' ? 'Materials you have purchased from suppliers. Use these to manufacture new products.' :
                  activeTab === 'products' ? 'Products you have manufactured from raw materials.' :
-                 'Immutable history of verified blockchain transactions.'}
+                 activeTab === 'orders' ? 'Immutable history of verified blockchain transactions.' :
+                 activeTab === 'revenue' ? 'Track revenue from customer purchases and manage receipts.' :
+                 'Manufacturer Dashboard'}
               </p>
             </div>
             
@@ -935,6 +1134,17 @@ export default function ManufacturerDashboard() {
               >
                 <Plus size={20} />
                 <span>Combine Materials</span>
+              </button>
+            )}
+
+            {/* Refresh Revenue Button */}
+            {activeTab === 'revenue' && (
+              <button
+                onClick={() => fetchRevenueData()}
+                className="flex items-center space-x-2 bg-indigo-600 text-white px-6 py-3 rounded-2xl font-bold hover:bg-indigo-700 transition"
+              >
+                <RefreshCw size={20} />
+                <span>Refresh Data</span>
               </button>
             )}
           </div>
@@ -964,7 +1174,7 @@ export default function ManufacturerDashboard() {
           </div>
         </div>
 
-        {loading ? (
+        {loading && activeTab !== 'revenue' ? (
           <div className="flex items-center justify-center h-64">
             <LoaderCircle className="animate-spin text-indigo-600" size={48} />
           </div>
@@ -1123,7 +1333,7 @@ export default function ManufacturerDashboard() {
             ) : activeTab === 'bought' ? (
               /* Purchased Materials View */
               <div className="animate-in fade-in duration-500">
-                {boughtMaterials.length === 0 ? (
+                {boughtMaterials.filter(m => m.quantity > 0).length === 0 ? (
                   <div className="text-center py-16">
                     <div className="w-24 h-24 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-6">
                       <Package className="text-gray-400" size={48} />
@@ -1140,10 +1350,12 @@ export default function ManufacturerDashboard() {
                 ) : (
                   <>
                     <div className="mb-6 text-sm text-gray-600">
-                      Showing {boughtMaterials.length} purchased materials
+                      Showing {boughtMaterials.filter(m => m.quantity > 0).length} purchased materials
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                      {boughtMaterials.map(material => (
+                      {boughtMaterials
+                        .filter(material => material.quantity > 0)
+                        .map(material => (
                         <div key={material._id} className="bg-white rounded-3xl shadow-sm border overflow-hidden hover:shadow-lg transition">
                           <img src={material.image} className="w-full h-48 object-cover" alt="" />
                           <div className="p-6">
@@ -1212,6 +1424,13 @@ export default function ManufacturerDashboard() {
                                 <button
                                   onClick={() => {
                                     setSelectedMaterial(material);
+                                    setManufactureFormData({
+                                      name: '',
+                                      description: '',
+                                      quantity: '',
+                                      price: '',
+                                      quantityUsed: '1'
+                                    });
                                     setShowManufactureModal(true);
                                   }}
                                   className="flex items-center justify-center space-x-2 w-full bg-green-600 text-white px-4 py-2.5 rounded-lg font-semibold hover:bg-green-700 transition"
@@ -1291,14 +1510,14 @@ export default function ManufacturerDashboard() {
                               </div>
                               
                               {/* Display materials used in combination */}
-                              {product.usedMaterials && product.usedMaterials.length > 0 && (
+                              {product.rawMaterials && product.rawMaterials.length > 0 && (
                                 <div className="mt-3 pt-3 border-t border-gray-100">
                                   <p className="text-xs font-bold text-gray-500 mb-2">Materials Used:</p>
                                   <div className="space-y-1">
-                                    {product.usedMaterials.map((mat, idx) => (
+                                    {product.rawMaterials.map((mat, idx) => (
                                       <div key={idx} className="text-xs text-gray-600 flex items-center space-x-1">
                                         <div className="w-1.5 h-1.5 bg-indigo-400 rounded-full"></div>
-                                        <span>{mat}</span>
+                                        <span>{mat.materialName} ({mat.quantity} units)</span>
                                       </div>
                                     ))}
                                   </div>
@@ -1306,9 +1525,9 @@ export default function ManufacturerDashboard() {
                               )}
                             </div>
                             
-                            {product.txHash && (
+                            {product.blockchainData?.txHash && (
                               <a
-                                href={`https://etherscan.io/tx/${product.txHash}`}
+                                href={`https://etherscan.io/tx/${product.blockchainData.txHash}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="flex items-center space-x-2 text-indigo-600 hover:text-indigo-800 text-xs"
@@ -1324,7 +1543,7 @@ export default function ManufacturerDashboard() {
                   </>
                 )}
               </div>
-            ) : (
+            ) : activeTab === 'orders' ? (
               /* Ledger View */
               <div className="bg-white rounded-[32px] shadow-sm border border-gray-200 overflow-hidden animate-in fade-in duration-500">
                 <div className="overflow-x-auto">
@@ -1392,7 +1611,301 @@ export default function ManufacturerDashboard() {
                   </table>
                 </div>
               </div>
-            )}
+            ) : activeTab === 'revenue' ? (
+              /* Revenue & Receipts View */
+              <div className="animate-in fade-in duration-500">
+                {/* Revenue Stats Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                  <div className="bg-gradient-to-br from-green-500 to-emerald-600 text-white p-6 rounded-3xl shadow-lg">
+                    <div className="flex items-center justify-between mb-4">
+                      <DollarSign size={32} className="opacity-80" />
+                      <TrendingUp size={24} className="opacity-80" />
+                    </div>
+                    <p className="text-sm opacity-90 mb-1">Total Revenue</p>
+                    <p className="text-3xl font-bold">{formatCurrency(revenueStats.totalRevenue)}</p>
+                    <p className="text-xs opacity-80 mt-2">From {revenueStats.totalOrders} orders</p>
+                  </div>
+                  
+                  <div className="bg-gradient-to-br from-blue-500 to-indigo-600 text-white p-6 rounded-3xl shadow-lg">
+                    <div className="flex items-center justify-between mb-4">
+                      <Receipt size={32} className="opacity-80" />
+                      <BarChart size={24} className="opacity-80" />
+                    </div>
+                    <p className="text-sm opacity-90 mb-1">Average Order Value</p>
+                    <p className="text-3xl font-bold">{formatCurrency(revenueStats.averageOrderValue)}</p>
+                    <p className="text-xs opacity-80 mt-2">{revenueStats.productsSold} products sold</p>
+                  </div>
+                  
+                  <div className="bg-gradient-to-br from-purple-500 to-pink-600 text-white p-6 rounded-3xl shadow-lg">
+                    <div className="flex items-center justify-between mb-4">
+                      <DollarSign size={32} className="opacity-80" />
+                      <Calendar size={24} className="opacity-80" />
+                    </div>
+                    <p className="text-sm opacity-90 mb-1">Monthly Revenue</p>
+                    <p className="text-3xl font-bold">{formatCurrency(revenueStats.monthlyRevenue)}</p>
+                    <p className="text-xs opacity-80 mt-2">Current month</p>
+                  </div>
+                  
+                  <div className="bg-gradient-to-br from-orange-500 to-red-600 text-white p-6 rounded-3xl shadow-lg">
+                    <div className="flex items-center justify-between mb-4">
+                      <Clock size={32} className="opacity-80" />
+                      <AlertCircle size={24} className="opacity-80" />
+                    </div>
+                    <p className="text-sm opacity-90 mb-1">Pending Amount</p>
+                    <p className="text-3xl font-bold">{formatCurrency(revenueStats.pendingAmount)}</p>
+                    <p className="text-xs opacity-80 mt-2">To be received</p>
+                  </div>
+                </div>
+
+                {/* Filters Section */}
+                <div className="bg-white rounded-2xl shadow-sm p-6 mb-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-bold text-gray-900">Filters</h3>
+                    <div className="flex items-center space-x-2">
+                      <Filter size={18} className="text-gray-500" />
+                      <span className="text-sm text-gray-600">{revenueData.length} receipts</span>
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    {/* Time Range Filter */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Time Range</label>
+                      <select
+                        value={revenueFilters.timeRange}
+                        onChange={(e) => handleTimeRangeChange(e.target.value)}
+                        className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      >
+                        <option value="all">All Time</option>
+                        <option value="today">Today</option>
+                        <option value="week">This Week</option>
+                        <option value="month">This Month</option>
+                        <option value="quarter">This Quarter</option>
+                        <option value="year">This Year</option>
+                      </select>
+                    </div>
+                    
+                    {/* Product Filter */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Product</label>
+                      <select
+                        value={revenueFilters.productFilter}
+                        onChange={(e) => handleProductFilterChange(e.target.value)}
+                        className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      >
+                        <option value="all">All Products</option>
+                        {manufacturedProducts.map(product => (
+                          <option key={product._id} value={product._id}>{product.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    
+                    {/* Status Filter */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Status</label>
+                      <select
+                        value={revenueFilters.statusFilter}
+                        onChange={(e) => handleStatusFilterChange(e.target.value)}
+                        className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      >
+                        <option value="all">All Status</option>
+                        <option value="delivered">Delivered</option>
+                        <option value="pending">Pending</option>
+                        <option value="returned">Returned</option>
+                        <option value="cancelled">Cancelled</option>
+                      </select>
+                    </div>
+                    
+                    {/* Sort By */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Sort By</label>
+                      <select
+                        value={revenueFilters.sortBy}
+                        onChange={(e) => handleSortChange(e.target.value)}
+                        className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      >
+                        <option value="date_desc">Date (Newest First)</option>
+                        <option value="date_asc">Date (Oldest First)</option>
+                        <option value="amount_desc">Amount (High to Low)</option>
+                        <option value="amount_asc">Amount (Low to High)</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Receipts Table */}
+                {revenueLoading ? (
+                  <div className="flex items-center justify-center h-64">
+                    <LoaderCircle className="animate-spin text-indigo-600" size={48} />
+                  </div>
+                ) : revenueData.length === 0 ? (
+                  <div className="text-center py-16 bg-white rounded-3xl shadow-sm">
+                    <Receipt size={64} className="mx-auto text-gray-300 mb-4" />
+                    <h3 className="text-2xl font-bold text-gray-900 mb-2">No Receipts Yet</h3>
+                    <p className="text-gray-500 mb-8">Revenue from customer purchases will appear here.</p>
+                    <button 
+                      onClick={() => setActiveTab('products')} 
+                      className="px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition"
+                    >
+                      View My Products
+                    </button>
+                  </div>
+                ) : (
+                  <div className="bg-white rounded-3xl shadow-sm overflow-hidden">
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead>
+                          <tr className="bg-gray-50">
+                            <th className="p-4 text-left text-sm font-semibold text-gray-600">Order Details</th>
+                            <th className="p-4 text-left text-sm font-semibold text-gray-600">Customer</th>
+                            <th className="p-4 text-left text-sm font-semibold text-gray-600">Products</th>
+                            <th className="p-4 text-left text-sm font-semibold text-gray-600">Amount</th>
+                            <th className="p-4 text-left text-sm font-semibold text-gray-600">Status</th>
+                            <th className="p-4 text-left text-sm font-semibold text-gray-600">Date</th>
+                            <th className="p-4 text-left text-sm font-semibold text-gray-600">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {revenueData.map((receipt) => (
+                            <tr key={receipt._id} className="hover:bg-gray-50 transition">
+                              <td className="p-4">
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
+                                    <Receipt size={20} className="text-indigo-600" />
+                                  </div>
+                                  <div>
+                                    <p className="font-bold text-gray-900">#{receipt.orderNumber}</p>
+                                    <p className="text-xs text-gray-500">
+                                      {receipt.paymentDetails?.paymentMethod === 'metamask' ? 'MetaMask' : 'Other'}
+                                    </p>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="p-4">
+                                <p className="font-medium text-gray-900">{receipt.customerName}</p>
+                                <p className="text-sm text-gray-600">{receipt.customerEmail}</p>
+                              </td>
+                              <td className="p-4">
+                                <div className="space-y-1">
+                                  {receipt.items.map((item, idx) => (
+                                    <div key={idx} className="flex items-center justify-between text-sm">
+                                      <span className="text-gray-700 truncate max-w-[150px]">{item.productName}</span>
+                                      <span className="text-gray-500">x{item.quantity}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </td>
+                              <td className="p-4">
+                                <p className="font-bold text-green-600">{formatCurrency(receipt.totalAmount)}</p>
+                                {receipt.paymentDetails?.walletAddress && (
+                                  <p className="text-xs text-gray-500 truncate max-w-[120px]">
+                                    {receipt.paymentDetails.walletAddress.slice(0, 6)}...{receipt.paymentDetails.walletAddress.slice(-4)}
+                                  </p>
+                                )}
+                              </td>
+                              <td className="p-4">
+                                <span className={`px-3 py-1 rounded-full text-xs font-bold ${getStatusColor(receipt.status)}`}>
+                                  {receipt.status}
+                                </span>
+                              </td>
+                              <td className="p-4">
+                                <p className="text-sm text-gray-700">{formatDate(receipt.createdAt)}</p>
+                              </td>
+                              <td className="p-4">
+                                <div className="flex items-center space-x-2">
+                                  <button
+                                    onClick={() => {
+                                      // View receipt details
+                                      alert(`Receipt Details:\n\nOrder: ${receipt.orderNumber}\nCustomer: ${receipt.customerName}\nAmount: ${formatCurrency(receipt.totalAmount)}\nStatus: ${receipt.status}\nDate: ${formatDate(receipt.createdAt)}`);
+                                    }}
+                                    className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
+                                  >
+                                    <Receipt size={18} />
+                                  </button>
+                                  {receipt.paymentDetails?.transactionHash && (
+                                    <a
+                                      href={`https://etherscan.io/tx/${receipt.paymentDetails.transactionHash}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
+                                      title="View on Blockchain"
+                                    >
+                                      <ExternalLink size={18} />
+                                    </a>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    
+                    {/* Pagination/Summary */}
+                    <div className="p-4 border-t border-gray-200 flex items-center justify-between">
+                      <p className="text-sm text-gray-600">
+                        Showing {revenueData.length} receipts • Total: {formatCurrency(revenueStats.totalRevenue)}
+                      </p>
+                      <div className="flex items-center space-x-4">
+                        <button
+                          onClick={() => {
+                            // Export revenue data
+                            const dataStr = JSON.stringify(revenueData, null, 2);
+                            const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+                            const exportFileDefaultName = `revenue-data-${new Date().toISOString().split('T')[0]}.json`;
+                            const linkElement = document.createElement('a');
+                            linkElement.setAttribute('href', dataUri);
+                            linkElement.setAttribute('download', exportFileDefaultName);
+                            linkElement.click();
+                          }}
+                          className="px-4 py-2 text-sm font-medium text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
+                        >
+                          Export Data
+                        </button>
+                        <button
+                          onClick={() => window.print()}
+                          className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition"
+                        >
+                          Print Summary
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+                {/* Revenue Summary */}
+                <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  <div className="bg-white p-6 rounded-3xl shadow-sm">
+                    <h4 className="font-bold text-gray-900 mb-4">Top Products</h4>
+                    <div className="space-y-3">
+                      {manufacturedProducts.slice(0, 3).map(product => (
+                        <div key={product._id} className="flex items-center justify-between">
+                          <span className="text-sm text-gray-700">{product.name}</span>
+                          <span className="font-bold text-green-600">₹{product.price}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  <div className="bg-white p-6 rounded-3xl shadow-sm">
+                    <h4 className="font-bold text-gray-900 mb-4">Recent Activity</h4>
+                    <div className="space-y-3">
+                      {revenueData.slice(0, 3).map(receipt => (
+                        <div key={receipt._id} className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm font-medium text-gray-900">#{receipt.orderNumber}</p>
+                            <p className="text-xs text-gray-500">{formatCurrency(receipt.totalAmount)}</p>
+                          </div>
+                          <span className={`text-xs px-2 py-1 rounded-full ${getStatusColor(receipt.status)}`}>
+                            {receipt.status}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </>
         )}
       </div>
@@ -1620,7 +2133,7 @@ export default function ManufacturerDashboard() {
             <button 
               onClick={() => {
                 setShowManufactureModal(false);
-                setManufactureFormData({ name: '', description: '', quantity: '', price: '' });
+                setManufactureFormData({ name: '', description: '', quantity: '', price: '', quantityUsed: '1' });
                 setManufactureImage(null);
                 setSelectedMaterial(null);
               }}
@@ -1676,7 +2189,7 @@ export default function ManufacturerDashboard() {
               
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">Quantity</label>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Quantity to Produce</label>
                   <input
                     type="number"
                     placeholder="Units to produce"
@@ -1684,10 +2197,8 @@ export default function ManufacturerDashboard() {
                     onChange={(e) => setManufactureFormData({...manufactureFormData, quantity: e.target.value})}
                     required
                     min="1"
-                    max={selectedMaterial.quantity}
                     className="w-full p-4 border border-gray-300 rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500"
                   />
-                  <p className="text-xs text-gray-500 mt-1">Max: {selectedMaterial.quantity} units</p>
                 </div>
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-2">Price (₹)</label>
@@ -1702,6 +2213,51 @@ export default function ManufacturerDashboard() {
                     className="w-full p-4 border border-gray-300 rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Quantity to Use from Material (Available: {selectedMaterial.quantity} units)
+                </label>
+                <div className="flex items-center space-x-3">
+                  <button
+                    onClick={() => {
+                      const current = parseInt(manufactureFormData.quantityUsed || '1');
+                      const newVal = Math.max(1, current - 1);
+                      setManufactureFormData({...manufactureFormData, quantityUsed: newVal.toString()});
+                    }}
+                    className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center hover:bg-gray-200 transition"
+                  >
+                    <Minus size={18} />
+                  </button>
+                  <input
+                    type="number"
+                    value={manufactureFormData.quantityUsed || '1'}
+                    onChange={(e) => {
+                      const value = parseInt(e.target.value) || 1;
+                      const max = selectedMaterial.quantity;
+                      const clamped = Math.max(1, Math.min(max, value));
+                      setManufactureFormData({...manufactureFormData, quantityUsed: clamped.toString()});
+                    }}
+                    min="1"
+                    max={selectedMaterial.quantity}
+                    className="flex-1 text-center text-xl font-bold py-2 border-2 border-gray-200 rounded-lg focus:border-indigo-500 outline-none"
+                  />
+                  <button
+                    onClick={() => {
+                      const current = parseInt(manufactureFormData.quantityUsed || '1');
+                      const max = selectedMaterial.quantity;
+                      const newVal = Math.min(max, current + 1);
+                      setManufactureFormData({...manufactureFormData, quantityUsed: newVal.toString()});
+                    }}
+                    className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center hover:bg-gray-200 transition"
+                  >
+                    <Plus size={18} />
+                  </button>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  Using {manufactureFormData.quantityUsed || '1'} of {selectedMaterial.quantity} units. {selectedMaterial.quantity - (parseInt(manufactureFormData.quantityUsed || '1'))} units will remain.
+                </p>
               </div>
               
               <div>
@@ -1745,6 +2301,7 @@ export default function ManufacturerDashboard() {
                 setShowCombineModal(false);
                 setSelectedMaterialsForCombine([]);
                 setCombineFormData({ name: '', description: '', quantity: '', price: '' });
+                setCombineQuantities({});
                 setCombineImage(null);
               }}
               className="absolute top-5 right-5 text-gray-400 hover:text-gray-600"
@@ -1774,7 +2331,7 @@ export default function ManufacturerDashboard() {
                       <div className="flex items-start justify-between mb-2">
                         <div className="flex-1">
                           <p className="font-bold text-sm text-gray-900 line-clamp-1">{material.productName}</p>
-                          <p className="text-xs text-gray-500">{material.quantity} units</p>
+                          <p className="text-xs text-gray-500">{material.quantity} units available</p>
                         </div>
                         <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
                           isSelected ? 'bg-green-500 border-green-500' : 'border-gray-300'
@@ -1801,18 +2358,55 @@ export default function ManufacturerDashboard() {
             {selectedMaterialsForCombine.length > 0 && (
               <div className="mb-6 p-4 bg-green-50 rounded-2xl border border-green-200">
                 <p className="font-bold text-sm text-green-900 mb-2">Selected Materials:</p>
-                <div className="flex flex-wrap gap-2">
-                  {selectedMaterialsForCombine.map((material) => (
-                    <div key={material._id} className="bg-white px-3 py-1.5 rounded-full text-sm font-semibold text-gray-700 flex items-center space-x-2">
-                      <span>{material.productName}</span>
-                      <button
-                        onClick={() => toggleMaterialSelection(material)}
-                        className="text-red-500 hover:text-red-700"
-                      >
-                        <X size={14} />
-                      </button>
-                    </div>
-                  ))}
+                <div className="space-y-3">
+                  {selectedMaterialsForCombine.map((material) => {
+                    const quantityUsed = combineQuantities[material._id] || 1;
+                    return (
+                      <div key={material._id} className="bg-white p-3 rounded-xl flex items-center justify-between">
+                        <div className="flex items-center space-x-3">
+                          {material.image && (
+                            <img 
+                              src={material.image} 
+                              alt={material.productName}
+                              className="w-12 h-12 rounded-lg object-cover"
+                            />
+                          )}
+                          <div>
+                            <p className="font-semibold text-gray-700">{material.productName}</p>
+                            <p className="text-xs text-gray-500">Available: {material.quantity} units</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <button
+                            onClick={() => updateCombineQuantity(material._id, quantityUsed - 1)}
+                            className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center hover:bg-gray-200"
+                          >
+                            <Minus size={14} />
+                          </button>
+                          <input
+                            type="number"
+                            value={quantityUsed}
+                            onChange={(e) => updateCombineQuantity(material._id, parseInt(e.target.value) || 1)}
+                            min="1"
+                            max={material.quantity}
+                            className="w-16 text-center border rounded-lg py-1"
+                          />
+                          <button
+                            onClick={() => updateCombineQuantity(material._id, quantityUsed + 1)}
+                            className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center hover:bg-gray-200"
+                          >
+                            <Plus size={14} />
+                          </button>
+                          <button
+                            onClick={() => toggleMaterialSelection(material)}
+                            className="ml-2 text-red-500 hover:text-red-700"
+                          >
+                            <X size={16} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -1843,7 +2437,7 @@ export default function ManufacturerDashboard() {
                 <div className="grid grid-cols-2 gap-4">
                   <input
                     type="number"
-                    placeholder="Quantity"
+                    placeholder="Quantity to Produce"
                     value={combineFormData.quantity}
                     onChange={(e) => setCombineFormData({...combineFormData, quantity: e.target.value})}
                     required

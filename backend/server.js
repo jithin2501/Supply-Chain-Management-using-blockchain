@@ -902,6 +902,504 @@ apiRouter.get('/products/:productId/detail', authenticateToken, async (req, res)
   }
 });
 
+/* ===================== MANUFACTURER REVENUE ROUTES ===================== */
+
+apiRouter.get('/manufacturer/revenue', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'manufacturers') {
+      return res.status(403).json({ message: 'Access denied. Manufacturers only.' });
+    }
+
+    console.log(`💰 [DEBUG] Fetching revenue for manufacturer: ${req.user.userId}`);
+
+    // Get query parameters for filtering
+    const { 
+      timeRange = 'all', 
+      productFilter = 'all', 
+      statusFilter = 'all',
+      sortBy = 'date_desc'
+    } = req.query;
+
+    // Get manufacturer's products
+    const manufacturerProducts = await ManufacturedProduct.find({
+      manufacturerId: req.user.userId
+    }).select('_id name');
+
+    console.log(`📊 [DEBUG] Manufacturer products:`, manufacturerProducts.map(p => ({id: p._id, name: p.name})));
+
+    const productIds = manufacturerProducts.map(p => p._id);
+    console.log(`🔍 [DEBUG] Looking for product IDs:`, productIds);
+
+    // Build query for manufacturer's orders - FIXED
+    // We need to find orders where at least one item has a product in productIds
+    const query = {
+      'items.product': { 
+        $in: productIds 
+      }
+    };
+
+    // Apply time range filter
+    if (timeRange !== 'all') {
+      const now = new Date();
+      let startDate;
+
+      switch (timeRange) {
+        case 'today':
+          startDate = new Date(now.setHours(0, 0, 0, 0));
+          break;
+        case 'week':
+          startDate = new Date(now.setDate(now.getDate() - 7));
+          break;
+        case 'month':
+          startDate = new Date(now.setMonth(now.getMonth() - 1));
+          break;
+        case 'quarter':
+          startDate = new Date(now.setMonth(now.getMonth() - 3));
+          break;
+        case 'year':
+          startDate = new Date(now.setFullYear(now.getFullYear() - 1));
+          break;
+      }
+
+      if (startDate) {
+        query.createdAt = { $gte: startDate };
+      }
+    }
+
+    // Apply product filter
+    if (productFilter !== 'all') {
+      query['items.product'] = mongoose.Types.ObjectId(productFilter);
+    }
+
+    // Apply status filter
+    if (statusFilter !== 'all') {
+      query.status = statusFilter;
+    }
+
+    // Determine sort order
+    let sortOption = { createdAt: -1 };
+    switch (sortBy) {
+      case 'date_asc':
+        sortOption = { createdAt: 1 };
+        break;
+      case 'amount_desc':
+        sortOption = { totalAmount: -1 };
+        break;
+      case 'amount_asc':
+        sortOption = { totalAmount: 1 };
+        break;
+    }
+
+    console.log(`🔎 [DEBUG] MongoDB Query:`, JSON.stringify(query, null, 2));
+
+    // Fetch orders with filters
+    const orders = await Order.find(query)
+      .populate('items.product')
+      .populate('customer', 'name email')
+      .sort(sortOption);
+
+    console.log(`📦 [DEBUG] Found ${orders.length} orders for manufacturer ${req.user.userId}`);
+    
+    // Debug each order
+    orders.forEach((order, index) => {
+      console.log(`📦 Order ${index + 1}: ${order.orderNumber}`);
+      console.log('   Items:', order.items.map(item => ({
+        productId: item.product?._id?.toString(),
+        productName: item.product?.name,
+        manufacturerId: item.product?.manufacturerId,
+        quantity: item.quantity,
+        price: item.price
+      })));
+    });
+
+    // Transform orders to revenue receipts
+    const receipts = orders.map(order => {
+      // Filter items to only include manufacturer's products
+      const manufacturerItems = order.items.filter(item => {
+        if (!item.product) return false;
+        
+        const itemProductId = item.product._id?.toString();
+        const isManufacturerProduct = productIds.some(pid => 
+          pid.toString() === itemProductId
+        );
+        
+        console.log(`   Checking item: ${item.product?.name} (${itemProductId}) - Is manufacturer's: ${isManufacturerProduct}`);
+        return isManufacturerProduct;
+      });
+
+      if (manufacturerItems.length === 0) {
+        console.log(`   No manufacturer items found in order ${order.orderNumber}`);
+        return null;
+      }
+
+      console.log(`   Found ${manufacturerItems.length} manufacturer items in order ${order.orderNumber}`);
+
+      // Calculate manufacturer's share of the order
+      const manufacturerTotal = manufacturerItems.reduce((sum, item) => {
+        return sum + (item.price * item.quantity);
+      }, 0);
+
+      return {
+        _id: order._id,
+        orderNumber: order.orderNumber,
+        customerName: order.customer?.name || order.deliveryAddress.name,
+        customerEmail: order.customer?.email || 'N/A',
+        items: manufacturerItems.map(item => ({
+          productId: item.product?._id || item.product,
+          productName: item.product?.name || 'Product',
+          quantity: item.quantity,
+          price: item.price,
+          subtotal: item.price * item.quantity
+        })),
+        totalAmount: manufacturerTotal,
+        status: order.status,
+        paymentDetails: order.paymentDetails || {},
+        createdAt: order.createdAt,
+        deliveryAddress: order.deliveryAddress,
+        trackingHistory: order.trackingHistory || []
+      };
+    }).filter(receipt => receipt !== null);
+
+    // Calculate statistics
+    const stats = {
+      totalRevenue: receipts.reduce((sum, receipt) => sum + receipt.totalAmount, 0),
+      totalOrders: receipts.length,
+      productsSold: receipts.reduce((sum, receipt) => 
+        sum + receipt.items.reduce((itemSum, item) => itemSum + item.quantity, 0), 0
+      ),
+      averageOrderValue: receipts.length > 0 ? 
+        receipts.reduce((sum, receipt) => sum + receipt.totalAmount, 0) / receipts.length : 0,
+      monthlyRevenue: 0,
+      pendingAmount: receipts
+        .filter(r => r.status === 'pending' || r.status === 'confirmed')
+        .reduce((sum, receipt) => sum + receipt.totalAmount, 0)
+    };
+
+    // Calculate monthly revenue
+    const currentMonth = new Date();
+    currentMonth.setDate(1);
+    currentMonth.setHours(0, 0, 0, 0);
+
+    const monthlyReceipts = receipts.filter(r => 
+      new Date(r.createdAt) >= currentMonth
+    );
+
+    stats.monthlyRevenue = monthlyReceipts.reduce((sum, receipt) => 
+      sum + receipt.totalAmount, 0
+    );
+
+    console.log(`💰 Final: Revenue data fetched for manufacturer ${req.user.userId}: ${receipts.length} receipts`);
+
+    res.json({
+      receipts,
+      stats,
+      filters: {
+        timeRange,
+        productFilter,
+        statusFilter,
+        sortBy
+      }
+    });
+
+  } catch (err) {
+    console.error('❌ Error fetching revenue data:', err);
+    res.status(500).json({ 
+      message: 'Server error',
+      error: err.message 
+    });
+  }
+});
+
+// Add this route for manufacturer's product sales summary
+apiRouter.get('/manufacturer/revenue/summary', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'manufacturers') {
+      return res.status(403).json({ message: 'Access denied. Manufacturers only.' });
+    }
+
+    // Get manufacturer's products
+    const products = await ManufacturedProduct.find({
+      manufacturerId: req.user.userId
+    });
+
+    // Get all orders containing manufacturer's products
+    const productIds = products.map(p => p._id);
+    
+    const orders = await Order.find({
+      'items.product': { $in: productIds }
+    }).populate('items.product');
+
+    // Calculate product-wise sales
+    const productSales = {};
+    let totalRevenue = 0;
+    let totalUnitsSold = 0;
+
+    orders.forEach(order => {
+      order.items.forEach(item => {
+        if (productIds.includes(item.product?._id?.toString() || item.product?.toString())) {
+          const productId = item.product?._id?.toString() || item.product?.toString();
+          
+          if (!productSales[productId]) {
+            productSales[productId] = {
+              productId: productId,
+              productName: item.product?.name || 'Unknown Product',
+              unitsSold: 0,
+              revenue: 0,
+              orders: 0
+            };
+          }
+
+          productSales[productId].unitsSold += item.quantity;
+          productSales[productId].revenue += item.price * item.quantity;
+          productSales[productId].orders += 1;
+          
+          totalUnitsSold += item.quantity;
+          totalRevenue += item.price * item.quantity;
+        }
+      });
+    });
+
+    // Convert to array and sort by revenue
+    const productSalesArray = Object.values(productSales)
+      .sort((a, b) => b.revenue - a.revenue);
+
+    // Calculate monthly trend
+    const monthlyData = {};
+    const currentYear = new Date().getFullYear();
+    
+    orders.forEach(order => {
+      const orderDate = new Date(order.createdAt);
+      if (orderDate.getFullYear() === currentYear) {
+        const month = orderDate.toLocaleString('default', { month: 'short' });
+        const yearMonth = `${month} ${orderDate.getFullYear()}`;
+        
+        if (!monthlyData[yearMonth]) {
+          monthlyData[yearMonth] = {
+            month: yearMonth,
+            revenue: 0,
+            orders: 0
+          };
+        }
+
+        // Calculate manufacturer's share for this month
+        const manufacturerShare = order.items
+          .filter(item => productIds.includes(item.product?._id?.toString() || item.product?.toString()))
+          .reduce((sum, item) => sum + (item.price * item.quantity), 0);
+
+        monthlyData[yearMonth].revenue += manufacturerShare;
+        monthlyData[yearMonth].orders += 1;
+      }
+    });
+
+    const monthlyTrend = Object.values(monthlyData)
+      .sort((a, b) => new Date(a.month) - new Date(b.month));
+
+    res.json({
+      summary: {
+        totalProducts: products.length,
+        totalRevenue,
+        totalUnitsSold,
+        averageOrderValue: orders.length > 0 ? totalRevenue / orders.length : 0
+      },
+      productSales: productSalesArray,
+      monthlyTrend,
+      topProducts: productSalesArray.slice(0, 5)
+    });
+
+  } catch (err) {
+    console.error('❌ Error fetching revenue summary:', err);
+    res.status(500).json({ 
+      message: 'Server error',
+      error: err.message 
+    });
+  }
+});
+
+// Add this route for detailed receipt view
+apiRouter.get('/manufacturer/receipt/:orderId', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'manufacturers') {
+      return res.status(403).json({ message: 'Access denied. Manufacturers only.' });
+    }
+
+    const { orderId } = req.params;
+
+    // Get manufacturer's products
+    const manufacturerProducts = await ManufacturedProduct.find({
+      manufacturerId: req.user.userId
+    }).select('_id');
+
+    const productIds = manufacturerProducts.map(p => p._id);
+
+    // Find the order
+    const order = await Order.findById(orderId)
+      .populate('items.product')
+      .populate('customer', 'name email phone')
+      .populate('deliveryPartner', 'name email company');
+
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    // Filter items to only include manufacturer's products
+    const manufacturerItems = order.items.filter(item => 
+      productIds.includes(item.product?._id?.toString() || item.product?.toString())
+    );
+
+    if (manufacturerItems.length === 0) {
+      return res.status(403).json({ message: 'No manufacturer products in this order' });
+    }
+
+    // Calculate manufacturer's share
+    const manufacturerTotal = manufacturerItems.reduce((sum, item) => {
+      return sum + (item.price * item.quantity);
+    }, 0);
+
+    // Calculate tax and other charges (simplified)
+    const taxRate = 0.18; // 18% GST
+    const taxAmount = manufacturerTotal * taxRate;
+    const netAmount = manufacturerTotal - taxAmount;
+
+    const receipt = {
+      orderNumber: order.orderNumber,
+      receiptNumber: `RCP-${order.orderNumber}-${Date.now().toString().slice(-6)}`,
+      invoiceDate: order.createdAt,
+      dueDate: new Date(order.createdAt.getTime() + 7 * 24 * 60 * 60 * 1000), // 7 days from order
+      
+      manufacturer: {
+        name: req.user.name,
+        company: req.user.company,
+        email: req.user.email
+      },
+      
+      customer: {
+        name: order.customer?.name || order.deliveryAddress.name,
+        email: order.customer?.email || 'N/A',
+        phone: order.customer?.phone || order.deliveryAddress.phone,
+        address: order.deliveryAddress
+      },
+      
+      items: manufacturerItems.map(item => ({
+        productName: item.product?.name || 'Product',
+        description: item.product?.description || '',
+        quantity: item.quantity,
+        unitPrice: item.price,
+        total: item.price * item.quantity
+      })),
+      
+      paymentDetails: order.paymentDetails || {},
+      orderStatus: order.status,
+      deliveryPartner: order.deliveryPartner,
+      
+      summary: {
+        subtotal: manufacturerTotal,
+        taxRate: `${(taxRate * 100)}%`,
+        taxAmount: taxAmount,
+        shipping: 0, // Free shipping for now
+        discount: 0,
+        totalAmount: manufacturerTotal,
+        amountPaid: manufacturerTotal,
+        balanceDue: 0
+      },
+      
+      paymentTerms: 'Net 7 Days',
+      notes: 'Thank you for your business!',
+      
+      tracking: order.trackingHistory || [],
+      createdAt: order.createdAt
+    };
+
+    console.log(`💰 Receipt generated for order ${order.orderNumber}`);
+
+    res.json({
+      message: 'Receipt generated successfully',
+      receipt,
+      downloadUrl: `/api/manufacturer/receipt/${orderId}/download`
+    });
+
+  } catch (err) {
+    console.error('❌ Error generating receipt:', err);
+    res.status(500).json({ 
+      message: 'Server error',
+      error: err.message 
+    });
+  }
+});
+
+// Add this route for downloading receipt as PDF
+apiRouter.get('/manufacturer/receipt/:orderId/download', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'manufacturers') {
+      return res.status(403).json({ message: 'Access denied. Manufacturers only.' });
+    }
+
+    const { orderId } = req.params;
+
+    // Get receipt data (reusing the logic from above)
+    const receiptData = await generateReceiptData(req.user.userId, orderId);
+
+    // For now, return JSON. In production, you'd generate a PDF here
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="receipt-${receiptData.receiptNumber}.json"`);
+    
+    res.json(receiptData);
+
+  } catch (err) {
+    console.error('❌ Error downloading receipt:', err);
+    res.status(500).json({ 
+      message: 'Server error',
+      error: err.message 
+    });
+  }
+});
+
+// Helper function to generate receipt data
+async function generateReceiptData(manufacturerId, orderId) {
+  const manufacturer = await User.findById(manufacturerId);
+  const manufacturerProducts = await ManufacturedProduct.find({
+    manufacturerId: manufacturerId
+  }).select('_id');
+
+  const productIds = manufacturerProducts.map(p => p._id);
+
+  const order = await Order.findById(orderId)
+    .populate('items.product')
+    .populate('customer', 'name email phone')
+    .populate('deliveryPartner', 'name email company');
+
+  const manufacturerItems = order.items.filter(item => 
+    productIds.includes(item.product?._id?.toString() || item.product?.toString())
+  );
+
+  const manufacturerTotal = manufacturerItems.reduce((sum, item) => {
+    return sum + (item.price * item.quantity);
+  }, 0);
+
+  return {
+    receiptNumber: `RCP-${order.orderNumber}-${Date.now().toString().slice(-6)}`,
+    invoiceDate: order.createdAt,
+    manufacturer: {
+      name: manufacturer.name,
+      company: manufacturer.company,
+      email: manufacturer.email
+    },
+    customer: {
+      name: order.customer?.name || order.deliveryAddress.name,
+      email: order.customer?.email || 'N/A',
+      address: order.deliveryAddress
+    },
+    items: manufacturerItems.map(item => ({
+      productName: item.product?.name || 'Product',
+      quantity: item.quantity,
+      unitPrice: item.price,
+      total: item.price * item.quantity
+    })),
+    totalAmount: manufacturerTotal,
+    orderStatus: order.status,
+    paymentDetails: order.paymentDetails
+  };
+}
+
 /* ===================== ORDER ROUTES ===================== */
 
 apiRouter.post('/orders/create', authenticateToken, async (req, res) => {
@@ -2321,15 +2819,17 @@ apiRouter.get('/manufacturer/bought-materials', authenticateToken, async (req, r
   }
 });
 
+/* ===================== MANUFACTURER ROUTES - CREATE PRODUCT ===================== */
+
 apiRouter.post('/manufacturer/create-product', authenticateToken, upload.single('image'), async (req, res) => {
   try {
     if (req.user.role !== 'manufacturers') {
       return res.status(403).json({ message: 'Access denied. Manufacturers only.' });
     }
 
-    const { name, description, quantity, price, materialId } = req.body;
+    const { name, description, quantity, price, materialId, quantityUsed } = req.body;
 
-    if (!name || !description || !quantity || !price || !materialId) {
+    if (!name || !description || !quantity || !price || !materialId || !quantityUsed) {
       return res.status(400).json({ message: 'All fields are required' });
     }
 
@@ -2350,6 +2850,12 @@ apiRouter.post('/manufacturer/create-product', authenticateToken, upload.single(
       return res.status(400).json({ message: 'Material has already been used' });
     }
 
+    if (parseInt(quantityUsed) > material.quantity) {
+      return res.status(400).json({ 
+        message: `Cannot use more units than available. Available: ${material.quantity}` 
+      });
+    }
+
     const manufacturer = await User.findById(req.user.userId);
     if (!manufacturer) {
       return res.status(404).json({ message: 'Manufacturer not found' });
@@ -2367,21 +2873,32 @@ apiRouter.post('/manufacturer/create-product', authenticateToken, upload.single(
       rawMaterials: [{
         materialId: material._id,
         materialName: material.productName,
-        quantity: material.quantity
+        quantity: parseInt(quantityUsed)
       }],
       status: 'available'
     });
 
     await manufacturedProduct.save();
 
-    material.status = 'used';
+    // Update material quantity instead of marking as used completely
+    material.quantity -= parseInt(quantityUsed);
+    
+    if (material.quantity === 0) {
+      material.status = 'used';
+    }
+    // If there's remaining quantity, status remains 'available'
+    
     await material.save();
 
-    console.log(`✅ Product manufactured: ${manufacturer.name} created ${name}`);
+    console.log(`✅ Product manufactured: ${manufacturer.name} created ${name} using ${quantityUsed} units of ${material.productName}`);
 
     res.json({
       message: 'Product manufactured successfully',
-      product: manufacturedProduct
+      product: manufacturedProduct,
+      material: {
+        remaining: material.quantity,
+        status: material.status
+      }
     });
 
   } catch (err) {
@@ -2393,15 +2910,17 @@ apiRouter.post('/manufacturer/create-product', authenticateToken, upload.single(
   }
 });
 
+/* ===================== MANUFACTURER COMBINE MATERIALS ===================== */
+
 apiRouter.post('/manufacturer/manufacture-combined', authenticateToken, upload.single('image'), async (req, res) => {
   try {
     if (req.user.role !== 'manufacturers') {
       return res.status(403).json({ message: 'Access denied. Manufacturers only.' });
     }
 
-    const { name, description, quantity, price, materialIds } = req.body;
+    const { name, description, quantity, price, materialIds, quantitiesUsed } = req.body;
 
-    if (!name || !description || !quantity || !price || !materialIds) {
+    if (!name || !description || !quantity || !price || !materialIds || !quantitiesUsed) {
       return res.status(400).json({ message: 'All fields are required' });
     }
 
@@ -2410,14 +2929,21 @@ apiRouter.post('/manufacturer/manufacture-combined', authenticateToken, upload.s
     }
 
     let parsedMaterialIds;
+    let parsedQuantitiesUsed;
+    
     try {
       parsedMaterialIds = JSON.parse(materialIds);
+      parsedQuantitiesUsed = JSON.parse(quantitiesUsed);
     } catch (err) {
-      return res.status(400).json({ message: 'Invalid material IDs format' });
+      return res.status(400).json({ message: 'Invalid material IDs or quantities format' });
     }
 
     if (!Array.isArray(parsedMaterialIds) || parsedMaterialIds.length < 2 || parsedMaterialIds.length > 3) {
       return res.status(400).json({ message: 'Please select 2-3 materials to combine' });
+    }
+
+    if (parsedMaterialIds.length !== parsedQuantitiesUsed.length) {
+      return res.status(400).json({ message: 'Material IDs and quantities must match' });
     }
 
     const manufacturer = await User.findById(req.user.userId);
@@ -2433,7 +2959,11 @@ apiRouter.post('/manufacturer/manufacture-combined', authenticateToken, upload.s
       return res.status(404).json({ message: 'One or more materials not found' });
     }
 
-    for (const material of materials) {
+    // Validate each material
+    for (let i = 0; i < materials.length; i++) {
+      const material = materials[i];
+      const quantityUsed = parseInt(parsedQuantitiesUsed[i]);
+
       if (material.manufacturerId.toString() !== req.user.userId) {
         return res.status(403).json({ 
           message: `You do not own the material: ${material.productName}` 
@@ -2445,12 +2975,18 @@ apiRouter.post('/manufacturer/manufacture-combined', authenticateToken, upload.s
           message: `Material "${material.productName}" has already been used` 
         });
       }
+
+      if (quantityUsed > material.quantity) {
+        return res.status(400).json({ 
+          message: `Cannot use ${quantityUsed} units of "${material.productName}". Available: ${material.quantity}` 
+        });
+      }
     }
 
-    const rawMaterialsArray = materials.map(material => ({
+    const rawMaterialsArray = materials.map((material, index) => ({
       materialId: material._id,
       materialName: material.productName,
-      quantity: material.quantity
+      quantity: parseInt(parsedQuantitiesUsed[index])
     }));
 
     const manufacturedProduct = new ManufacturedProduct({
@@ -2468,10 +3004,19 @@ apiRouter.post('/manufacturer/manufacture-combined', authenticateToken, upload.s
 
     await manufacturedProduct.save();
 
-    await PurchasedMaterial.updateMany(
-      { _id: { $in: parsedMaterialIds } },
-      { $set: { status: 'used' } }
-    );
+    // Update each material quantity
+    for (let i = 0; i < materials.length; i++) {
+      const material = materials[i];
+      const quantityUsed = parseInt(parsedQuantitiesUsed[i]);
+      
+      material.quantity -= quantityUsed;
+      
+      if (material.quantity === 0) {
+        material.status = 'used';
+      }
+      
+      await material.save();
+    }
 
     console.log(`✅ Combined product manufactured: ${manufacturer.name} created ${name} from ${materials.length} materials`);
 
@@ -2489,10 +3034,9 @@ apiRouter.post('/manufacturer/manufacture-combined', authenticateToken, upload.s
     });
   }
 });
-
 /* ===================== WALLET ROUTES ===================== */
 
-apiRouter.put('/user/wallet', authenticateToken, async (req, res) => {
+apiRouter.put('/users/wallet', authenticateToken, async (req, res) => {
   try {
     const { walletAddress } = req.body;
 
