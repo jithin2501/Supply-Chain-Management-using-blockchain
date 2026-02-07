@@ -9,6 +9,8 @@ import SupplierDashboard from './components/SupplierDashboard';
 import ManufacturerDashboard from './components/ManufacturerDashboard';
 import ProductsDashboard from './components/ProductsDashboard';
 import DeliveryPartnerDashboard from './components/DeliveryPartnerDashboard';
+import ManufacturerRefunds from './components/ManufacturerRefunds';
+
 
 // Private Route Component for role-based access
 const PrivateRoute = ({ children, allowedRoles }) => {
@@ -150,6 +152,8 @@ const App = () => {
             </PrivateRoute>
           } 
         />
+        <Route path="/manufacturer/refunds" element={<ManufacturerRefunds />} />
+          
 
         {/* Fallback Routes */}
         <Route path="/dashboard" element={

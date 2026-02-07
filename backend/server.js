@@ -1161,8 +1161,125 @@ apiRouter.get('/manufacturer/revenue', authenticateToken, async (req, res) => {
     });
   }
 });
+apiRouter.get('/debug/refunds', authenticateToken, async (req, res) => {
+  try {
+    const allRefunds = await Refund.find({})
+      .populate('customerId', 'name email')
+      .populate('manufacturerId', 'name email role')
+      .populate('deliveryPartnerId', 'name email');
+    
+    const manufacturers = await User.find({ role: 'manufacturers' });
+    
+    const debugInfo = {
+      totalRefunds: allRefunds.length,
+      currentUser: {
+        id: req.user.userId,
+        role: req.user.role
+      },
+      manufacturers: manufacturers.map(m => ({
+        id: m._id.toString(),
+        name: m.name,
+        email: m.email
+      })),
+      refunds: allRefunds.map(r => ({
+        id: r._id.toString(),
+        orderNumber: r.orderNumber,
+        manufacturerId: r.manufacturerId?._id?.toString() || r.manufacturerId?.toString() || 'MISSING',
+        manufacturerName: r.manufacturerId?.name || r.manufacturerName || 'MISSING',
+        customerName: r.customerName,
+        amount: r.totalAmount,
+        status: r.status,
+        createdAt: r.createdAt
+      }))
+    };
+    
+    res.json(debugInfo);
+  } catch (error) {
+    console.error('Debug error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
-// Manufacturer refunds management
+// ========== 2. FIX REFUNDS ENDPOINT (ADMIN ONLY) ==========
+apiRouter.post('/debug/fix-refunds', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Admin only' });
+    }
+
+    const allRefunds = await Refund.find({});
+    const fixed = [];
+    const errors = [];
+
+    for (const refund of allRefunds) {
+      try {
+        // Check if manufacturerId needs fixing
+        const needsFix = !refund.manufacturerId || 
+                        !mongoose.Types.ObjectId.isValid(refund.manufacturerId) ||
+                        !(await User.findById(refund.manufacturerId));
+
+        if (needsFix) {
+          console.log(`🔧 Fixing refund ${refund.orderNumber}...`);
+          
+          // Try to find manufacturer from order -> product
+          const order = await Order.findById(refund.orderId);
+          if (order && order.items && order.items.length > 0) {
+            // Get first product to find manufacturer
+            const product = await ManufacturedProduct.findById(order.items[0].product)
+              .populate('manufacturerId');
+            
+            if (product && product.manufacturerId) {
+              const oldId = refund.manufacturerId?.toString() || 'none';
+              
+              refund.manufacturerId = product.manufacturerId._id;
+              refund.manufacturerName = product.manufacturerId.name;
+              refund.manufacturerEmail = product.manufacturerId.email;
+              await refund.save();
+              
+              fixed.push({
+                orderNumber: refund.orderNumber,
+                oldManufacturerId: oldId,
+                fixedManufacturerId: product.manufacturerId._id.toString(),
+                manufacturerName: product.manufacturerId.name
+              });
+              
+              console.log(`✅ Fixed: ${refund.orderNumber} -> ${product.manufacturerId.name}`);
+            } else {
+              errors.push({
+                orderNumber: refund.orderNumber,
+                error: 'Could not find manufacturer from product'
+              });
+            }
+          } else {
+            errors.push({
+              orderNumber: refund.orderNumber,
+              error: 'Order not found or has no items'
+            });
+          }
+        }
+      } catch (err) {
+        errors.push({
+          orderNumber: refund.orderNumber,
+          error: err.message
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Refund migration completed',
+      totalRefunds: allRefunds.length,
+      fixed: fixed.length,
+      errors: errors.length,
+      details: { fixed, errors }
+    });
+  } catch (error) {
+    console.error('Migration error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ========== 3. GET ALL REFUNDS FOR MANUFACTURER (MAIN ENDPOINT) ==========
 apiRouter.get('/manufacturer/refunds', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'manufacturers') {
@@ -1171,16 +1288,31 @@ apiRouter.get('/manufacturer/refunds', authenticateToken, async (req, res) => {
 
     const { status } = req.query;
     
-    const query = { manufacturerId: req.user.userId };
+    // Ensure we're using ObjectId for the query
+    let manufacturerObjectId;
+    try {
+      manufacturerObjectId = mongoose.Types.ObjectId.isValid(req.user.userId) 
+        ? new mongoose.Types.ObjectId(req.user.userId)
+        : req.user.userId;
+    } catch (e) {
+      manufacturerObjectId = req.user.userId;
+    }
+    
+    const query = { manufacturerId: manufacturerObjectId };
     if (status && status !== 'all') {
       query.status = status;
     }
+
+    console.log('🔍 Fetching refunds for manufacturer:', req.user.userId);
+    console.log('📝 Query:', JSON.stringify(query));
 
     const refunds = await Refund.find(query)
       .populate('customerId', 'name email walletAddress')
       .populate('deliveryPartnerId', 'name email')
       .populate('orderId', 'orderNumber')
       .sort({ createdAt: -1 });
+
+    console.log('✅ Refunds found:', refunds.length);
 
     // Calculate summary
     const totalRefundAmount = refunds.reduce((sum, refund) => sum + refund.totalAmount, 0);
@@ -1206,17 +1338,32 @@ apiRouter.get('/manufacturer/refunds', authenticateToken, async (req, res) => {
   }
 });
 
+// ========== 4. GET SINGLE REFUND DETAILS ==========
 apiRouter.get('/manufacturer/refunds/:refundId', authenticateToken, async (req, res) => {
   try {
-    if (req.user.role !== 'manufacturers') {
-      return res.status(403).json({ message: 'Access denied. Manufacturers only.' });
+    const { refundId } = req.params;
+    
+    // ADD THIS VALIDATION:
+    if (refundId === 'stats' || refundId === 'summary' || refundId === 'stats-summary') {
+      return res.status(400).json({ 
+        message: 'Use /manufacturer/refunds-summary for statistics',
+        correctEndpoint: '/api/manufacturer/refunds-summary'
+      });
     }
 
-    const { refundId } = req.params;
+    // Ensure we're using ObjectId for the query
+    let manufacturerObjectId;
+    try {
+      manufacturerObjectId = mongoose.Types.ObjectId.isValid(req.user.userId) 
+        ? new mongoose.Types.ObjectId(req.user.userId)
+        : req.user.userId;
+    } catch (e) {
+      manufacturerObjectId = req.user.userId;
+    }
 
     const refund = await Refund.findOne({
       _id: refundId,
-      manufacturerId: req.user.userId
+      manufacturerId: manufacturerObjectId
     })
       .populate('customerId', 'name email walletAddress')
       .populate('deliveryPartnerId', 'name email')
@@ -1238,6 +1385,7 @@ apiRouter.get('/manufacturer/refunds/:refundId', authenticateToken, async (req, 
   }
 });
 
+// ========== 5. PROCESS REFUND (APPROVE/REJECT/COMPLETE) ==========
 apiRouter.put('/manufacturer/refunds/:refundId/process', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'manufacturers') {
@@ -1247,34 +1395,59 @@ apiRouter.put('/manufacturer/refunds/:refundId/process', authenticateToken, asyn
     const { refundId } = req.params;
     const { action, transactionHash, notes } = req.body;
 
+    // Validate action
     if (!action || !['approve', 'reject', 'complete'].includes(action)) {
-      return res.status(400).json({ message: 'Invalid action' });
+      return res.status(400).json({ message: 'Invalid action. Must be approve, reject, or complete.' });
     }
 
+    // Ensure we're using ObjectId for the query
+    let manufacturerObjectId;
+    try {
+      manufacturerObjectId = mongoose.Types.ObjectId.isValid(req.user.userId) 
+        ? new mongoose.Types.ObjectId(req.user.userId)
+        : req.user.userId;
+    } catch (e) {
+      manufacturerObjectId = req.user.userId;
+    }
+
+    // Find the refund
     const refund = await Refund.findOne({
       _id: refundId,
-      manufacturerId: req.user.userId
+      manufacturerId: manufacturerObjectId
     });
 
     if (!refund) {
-      return res.status(404).json({ message: 'Refund not found' });
+      return res.status(404).json({ message: 'Refund not found or you do not have permission to process it.' });
     }
 
     // Check if refund can be processed
     if (refund.status === 'completed' || refund.status === 'failed') {
-      return res.status(400).json({ message: `Refund is already ${refund.status}` });
+      return res.status(400).json({ message: `Refund is already ${refund.status} and cannot be modified.` });
     }
 
+    // Get manufacturer and order details
     const manufacturer = await User.findById(req.user.userId);
     const order = await Order.findById(refund.orderId);
 
+    if (!manufacturer) {
+      return res.status(404).json({ message: 'Manufacturer not found.' });
+    }
+
+    // Process based on action
     if (action === 'approve') {
+      // Approve the refund - change status to processing
+      if (refund.status !== 'pending') {
+        return res.status(400).json({ message: 'Only pending refunds can be approved.' });
+      }
+
       refund.status = 'processing';
       refund.notes = notes || refund.notes;
+      refund.updatedAt = new Date();
       
+      // Add to tracking history
       refund.trackingHistory.push({
         status: 'processing',
-        message: 'Refund approved and ready for processing',
+        message: 'Refund approved by manufacturer and ready for payment processing',
         timestamp: new Date(),
         updatedBy: {
           userId: req.user.userId,
@@ -1290,7 +1463,7 @@ apiRouter.put('/manufacturer/refunds/:refundId/process', authenticateToken, asyn
         
         order.trackingHistory.push({
           status: 'refund_approved',
-          message: 'Refund approved by manufacturer',
+          message: 'Refund approved by manufacturer. Awaiting payment processing.',
           timestamp: new Date(),
           deliveryPartner: {
             name: manufacturer.name,
@@ -1301,9 +1474,30 @@ apiRouter.put('/manufacturer/refunds/:refundId/process', authenticateToken, asyn
         await order.save();
       }
 
+      await refund.save();
+
+      console.log(`✅ Refund ${refund.orderNumber} approved by ${manufacturer.name}`);
+
+      return res.json({
+        success: true,
+        message: 'Refund approved successfully. You can now complete the refund using MetaMask.',
+        refund: refund
+      });
+
     } else if (action === 'complete') {
-      if (!transactionHash) {
-        return res.status(400).json({ message: 'Transaction hash is required to complete refund' });
+      // Complete the refund with blockchain transaction
+      if (refund.status !== 'processing') {
+        return res.status(400).json({ message: 'Only processing refunds can be completed. Please approve the refund first.' });
+      }
+
+      // Validate transaction hash
+      if (!transactionHash || transactionHash.trim() === '') {
+        return res.status(400).json({ message: 'Transaction hash is required to complete the refund.' });
+      }
+
+      // Validate transaction hash format (Ethereum transaction hash)
+      if (!/^0x([A-Fa-f0-9]{64})$/.test(transactionHash)) {
+        return res.status(400).json({ message: 'Invalid transaction hash format. Must be a valid Ethereum transaction hash.' });
       }
 
       refund.status = 'completed';
@@ -1311,9 +1505,10 @@ apiRouter.put('/manufacturer/refunds/:refundId/process', authenticateToken, asyn
       refund.notes = notes || refund.notes;
       refund.updatedAt = new Date();
       
+      // Add to tracking history
       refund.trackingHistory.push({
         status: 'completed',
-        message: `Refund completed. Transaction: ${transactionHash}`,
+        message: `Refund completed successfully via blockchain. Transaction hash: ${transactionHash}`,
         timestamp: new Date(),
         updatedBy: {
           userId: req.user.userId,
@@ -1330,29 +1525,56 @@ apiRouter.put('/manufacturer/refunds/:refundId/process', authenticateToken, asyn
         
         order.trackingHistory.push({
           status: 'refund_completed',
-          message: `Refund completed successfully. Transaction: ${transactionHash}`,
+          message: `Refund of ₹${refund.totalAmount.toFixed(2)} completed successfully. Transaction: ${transactionHash}`,
           timestamp: new Date()
         });
         
-        // Return product quantity to inventory
+        // Return product quantities to manufacturer's inventory
+        console.log('📦 Returning products to inventory...');
         for (const item of refund.items) {
-          await ManufacturedProduct.findByIdAndUpdate(
-            item.productId,
-            { $inc: { quantity: item.quantity } }
-          );
+          const product = await ManufacturedProduct.findById(item.productId);
+          if (product) {
+            const previousQuantity = product.quantity;
+            product.quantity += item.quantity;
+            product.status = 'available'; // Make sure it's available again
+            await product.save();
+            console.log(`✅ Returned ${item.quantity} units of ${item.productName} to inventory (${previousQuantity} → ${product.quantity})`);
+          }
         }
         
         await order.save();
       }
 
+      await refund.save();
+
+      console.log(`💰 Refund ${refund.orderNumber} completed: ₹${refund.totalAmount} sent to customer`);
+
+      return res.json({
+        success: true,
+        message: 'Refund completed successfully! Amount has been sent to customer via blockchain.',
+        refund: refund,
+        transactionHash: transactionHash
+      });
+
     } else if (action === 'reject') {
+      // Reject the refund
+      if (refund.status !== 'pending') {
+        return res.status(400).json({ message: 'Only pending refunds can be rejected.' });
+      }
+
+      // Validate rejection notes
+      if (!notes || notes.trim() === '') {
+        return res.status(400).json({ message: 'Notes are required when rejecting a refund. Please provide a reason.' });
+      }
+
       refund.status = 'rejected';
-      refund.notes = notes || refund.notes;
+      refund.notes = notes;
       refund.updatedAt = new Date();
       
+      // Add to tracking history
       refund.trackingHistory.push({
         status: 'rejected',
-        message: 'Refund rejected by manufacturer',
+        message: `Refund rejected by manufacturer. Reason: ${notes}`,
         timestamp: new Date(),
         updatedBy: {
           userId: req.user.userId,
@@ -1365,37 +1587,286 @@ apiRouter.put('/manufacturer/refunds/:refundId/process', authenticateToken, asyn
       if (order) {
         order.returnRequest.status = 'rejected';
         order.returnRequest.lastUpdated = new Date();
-        order.status = 'delivered'; // Revert to delivered
+        order.returnRequest.notes = notes;
+        order.status = 'delivered'; // Revert to delivered status
         
         order.trackingHistory.push({
           status: 'refund_rejected',
-          message: 'Refund rejected by manufacturer',
+          message: `Refund request rejected by manufacturer. Reason: ${notes}`,
           timestamp: new Date()
         });
         
         await order.save();
       }
+
+      await refund.save();
+
+      console.log(`❌ Refund ${refund.orderNumber} rejected by ${manufacturer.name}: ${notes}`);
+
+      return res.json({
+        success: true,
+        message: 'Refund rejected successfully.',
+        refund: refund
+      });
     }
-
-    await refund.save();
-
-    console.log(`✅ Refund ${refundId} ${action}ed by manufacturer ${manufacturer.email}`);
-
-    res.json({
-      message: `Refund ${action}d successfully`,
-      refund
-    });
 
   } catch (err) {
     console.error('❌ Error processing refund:', err);
     res.status(500).json({ 
-      message: 'Server error',
+      success: false,
+      message: 'Failed to process refund. Please try again.',
       error: err.message 
     });
   }
 });
+// ========== CREATE REFUND FOR EXISTING ORDER ==========
+apiRouter.post('/manufacturer/create-refund-for-order/:orderNumber', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'manufacturers') {
+      return res.status(403).json({ message: 'Access denied. Manufacturers only.' });
+    }
 
-// Add this route for manufacturer's product sales summary
+    const { orderNumber } = req.params;
+    const manufacturerId = req.user.userId;
+
+    console.log(`🔧 Creating refund for order ${orderNumber} for manufacturer ${manufacturerId}`);
+
+    // Find the order
+    const order = await Order.findOne({ orderNumber })
+      .populate('customer', 'name email walletAddress')
+      .populate('items.product')
+      .populate('deliveryPartner', 'name email');
+
+    if (!order) {
+      return res.status(404).json({ 
+        success: false,
+        message: `Order ${orderNumber} not found` 
+      });
+    }
+
+    // Check if order has return request
+    if (!order.returnRequest || !order.returnRequest.requested) {
+      return res.status(400).json({
+        success: false,
+        message: `Order ${orderNumber} does not have a return request`
+      });
+    }
+
+    // Get manufacturer details
+    const manufacturer = await User.findById(manufacturerId);
+    if (!manufacturer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Manufacturer not found'
+      });
+    }
+
+    // Filter items that belong to this manufacturer
+    const manufacturerItems = [];
+
+    // Get all products from this manufacturer
+    const manufacturerProducts = await ManufacturedProduct.find({
+      manufacturerId: manufacturerId
+    }).select('_id');
+
+    const manufacturerProductIds = manufacturerProducts.map(p => p._id.toString());
+
+    // Check which items belong to this manufacturer
+    for (const item of order.items) {
+      if (item.product && manufacturerProductIds.includes(item.product._id.toString())) {
+        manufacturerItems.push({
+          productId: item.product._id,
+          productName: item.product.name,
+          quantity: item.quantity,
+          price: item.price,
+          subtotal: item.price * item.quantity
+        });
+      }
+    }
+
+    if (manufacturerItems.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No items found in this order that belong to your manufacturing company'
+      });
+    }
+
+    // Calculate total amount for this manufacturer's items
+    const totalAmount = manufacturerItems.reduce((sum, item) => sum + item.subtotal, 0);
+
+    // Check if refund already exists
+    const existingRefund = await Refund.findOne({ 
+      orderNumber: orderNumber,
+      manufacturerId: manufacturerId 
+    });
+
+    if (existingRefund) {
+      return res.json({
+        success: true,
+        message: 'Refund already exists for this order',
+        refund: existingRefund,
+        action: 'View it in refund management'
+      });
+    }
+
+    // Create new refund
+    const refund = new Refund({
+      orderId: order._id,
+      orderNumber: order.orderNumber,
+      customerId: order.customer._id,
+      customerName: order.customer.name,
+      customerEmail: order.customer.email,
+      manufacturerId: manufacturerId,
+      manufacturerName: manufacturer.name,
+      manufacturerEmail: manufacturer.email,
+      deliveryPartnerId: order.deliveryPartner?._id,
+      deliveryPartnerName: order.deliveryPartner?.name,
+      items: manufacturerItems,
+      totalAmount: totalAmount,
+      reason: order.returnRequest.reason || 'Return requested',
+      refundMethod: 'wallet',
+      status: 'pending',
+      walletAddress: order.customer.walletAddress || order.paymentDetails?.walletAddress,
+      trackingHistory: [{
+        status: 'pending',
+        message: 'Refund created manually for order return',
+        timestamp: new Date(),
+        updatedBy: {
+          userId: manufacturerId,
+          name: manufacturer.name,
+          role: 'manufacturer'
+        }
+      }],
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+
+    await refund.save();
+
+    // Update order with refund ID
+    if (!order.returnRequest.refundId) {
+      order.returnRequest.refundId = refund._id;
+      await order.save();
+    }
+
+    console.log(`✅ Refund created for ${orderNumber}: £${totalAmount}`);
+
+    res.json({
+      success: true,
+      message: `Refund created successfully for £${totalAmount}`,
+      refund: {
+        _id: refund._id,
+        orderNumber: refund.orderNumber,
+        customerName: refund.customerName,
+        totalAmount: refund.totalAmount,
+        status: refund.status,
+        itemsCount: refund.items.length,
+        createdAt: refund.createdAt
+      },
+      nextStep: 'Refresh the refund management page to see and process this refund'
+    });
+
+  } catch (error) {
+    console.error('❌ Error creating refund:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create refund',
+      error: error.message
+    });
+  }
+});
+
+// ========== CHECK ORDERS WITH RETURNS ==========
+apiRouter.get('/manufacturer/orders-with-returns', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'manufacturers') {
+      return res.status(403).json({ message: 'Access denied. Manufacturers only.' });
+    }
+
+    const manufacturerId = req.user.userId;
+
+    // Get all orders with return requests
+    const ordersWithReturns = await Order.find({
+      'returnRequest.requested': true,
+      'returnRequest.status': { $in: ['refund_requested', 'pending', 'approved'] }
+    })
+      .populate('items.product')
+      .populate('customer', 'name email')
+      .sort({ 'returnRequest.requestedAt': -1 });
+
+    // Filter orders that contain products from this manufacturer
+    const manufacturerOrders = [];
+    
+    // Get manufacturer's products
+    const manufacturerProducts = await ManufacturedProduct.find({
+      manufacturerId: manufacturerId
+    }).select('_id name');
+
+    const manufacturerProductIds = manufacturerProducts.map(p => p._id.toString());
+
+    for (const order of ordersWithReturns) {
+      // Check if any item in this order belongs to this manufacturer
+      const hasManufacturerItems = order.items.some(item => 
+        item.product && manufacturerProductIds.includes(item.product._id.toString())
+      );
+
+      if (hasManufacturerItems) {
+        // Calculate manufacturer's share
+        const manufacturerItems = order.items.filter(item => 
+          item.product && manufacturerProductIds.includes(item.product._id.toString())
+        );
+
+        const manufacturerTotal = manufacturerItems.reduce((sum, item) => 
+          sum + (item.price * item.quantity), 0
+        );
+
+        // Check if refund already exists
+        const existingRefund = await Refund.findOne({
+          orderNumber: order.orderNumber,
+          manufacturerId: manufacturerId
+        });
+
+        manufacturerOrders.push({
+          orderNumber: order.orderNumber,
+          orderId: order._id,
+          customerName: order.customer?.name || order.deliveryAddress.name,
+          returnReason: order.returnRequest.reason,
+          returnStatus: order.returnRequest.status,
+          requestedAt: order.returnRequest.requestedAt,
+          items: manufacturerItems.map(item => ({
+            productName: item.product?.name,
+            quantity: item.quantity,
+            price: item.price,
+            subtotal: item.price * item.quantity
+          })),
+          totalAmount: manufacturerTotal,
+          hasRefund: !!existingRefund,
+          refundId: existingRefund?._id,
+          refundStatus: existingRefund?.status,
+          createdAt: order.createdAt
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      manufacturerId: manufacturerId,
+      manufacturerProducts: manufacturerProducts.length,
+      ordersWithReturns: manufacturerOrders.length,
+      orders: manufacturerOrders
+    });
+
+  } catch (error) {
+    console.error('❌ Error checking orders with returns:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to check orders',
+      error: error.message
+    });
+  }
+});
+
+// ========== 7. REVENUE SUMMARY (EXISTING - NO CHANGES) ==========
 apiRouter.get('/manufacturer/revenue/summary', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'manufacturers') {
@@ -1500,7 +1971,7 @@ apiRouter.get('/manufacturer/revenue/summary', authenticateToken, async (req, re
   }
 });
 
-// Add this route for detailed receipt view
+// ========== 8. RECEIPT GENERATION (EXISTING - NO CHANGES) ==========
 apiRouter.get('/manufacturer/receipt/:orderId', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'manufacturers') {
@@ -1611,7 +2082,7 @@ apiRouter.get('/manufacturer/receipt/:orderId', authenticateToken, async (req, r
   }
 });
 
-// Add this route for downloading receipt as PDF
+// ========== 9. DOWNLOAD RECEIPT (EXISTING - NO CHANGES) ==========
 apiRouter.get('/manufacturer/receipt/:orderId/download', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'manufacturers') {
@@ -1638,7 +2109,7 @@ apiRouter.get('/manufacturer/receipt/:orderId/download', authenticateToken, asyn
   }
 });
 
-// Helper function to generate receipt data
+// ========== HELPER FUNCTION ==========
 async function generateReceiptData(manufacturerId, orderId) {
   const manufacturer = await User.findById(manufacturerId);
   const manufacturerProducts = await ManufacturedProduct.find({
@@ -3645,6 +4116,104 @@ app.use((err, req, res, next) => {
     message: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong',
     timestamp: new Date().toISOString()
   });
+});
+
+
+// ========== 6. GET REFUND STATISTICS ==========
+apiRouter.get('/manufacturer/refunds-summary', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'manufacturers') {
+      return res.status(403).json({ message: 'Access denied. Manufacturers only.' });
+    }
+
+    // Ensure we're using ObjectId for the query
+    let manufacturerObjectId;
+    try {
+      manufacturerObjectId = mongoose.Types.ObjectId.isValid(req.user.userId) 
+        ? new mongoose.Types.ObjectId(req.user.userId)
+        : req.user.userId;
+    } catch (e) {
+      manufacturerObjectId = req.user.userId;
+    }
+
+    const refunds = await Refund.find({ manufacturerId: manufacturerObjectId });
+
+    const stats = {
+      total: refunds.length,
+      pending: refunds.filter(r => r.status === 'pending').length,
+      processing: refunds.filter(r => r.status === 'processing').length,
+      completed: refunds.filter(r => r.status === 'completed').length,
+      rejected: refunds.filter(r => r.status === 'rejected').length,
+      failed: refunds.filter(r => r.status === 'failed').length,
+      totalRefundAmount: refunds.reduce((sum, r) => sum + r.totalAmount, 0),
+      completedRefundAmount: refunds.filter(r => r.status === 'completed').reduce((sum, r) => sum + r.totalAmount, 0),
+      pendingRefundAmount: refunds.filter(r => r.status === 'pending' || r.status === 'processing').reduce((sum, r) => sum + r.totalAmount, 0)
+    };
+
+    console.log(`📊 Refund stats for manufacturer ${req.user.userId}:`, stats);
+
+    res.json({
+      success: true,
+      stats: stats
+    });
+
+  } catch (err) {
+    console.error('❌ Error fetching refund stats:', err);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to fetch refund statistics',
+      error: err.message 
+    });
+  }
+});
+
+// Debug endpoint to check why refunds aren't showing
+apiRouter.get('/debug/check-manufacturer-refunds', authenticateToken, async (req, res) => {
+  try {
+    const manufacturerId = req.user.userId;
+    
+    console.log('🔍 Checking refunds for manufacturer:', manufacturerId);
+    
+    // 1. Check all refunds in database
+    const allRefunds = await Refund.find({});
+    console.log('📊 Total refunds in system:', allRefunds.length);
+    
+    // 2. Check refunds with your manufacturerId
+    const myRefunds = await Refund.find({ manufacturerId: manufacturerId });
+    console.log('📊 Refunds with your manufacturerId:', myRefunds.length);
+    
+    // 3. Check if any orders have return_requested status
+    const returnOrders = await Order.find({ 
+      'returnRequest.status': 'refund_requested'
+    }).populate('items.product');
+    
+    console.log('📊 Orders with refund_requested:', returnOrders.length);
+    
+    // 4. Check your manufactured products
+    const myProducts = await ManufacturedProduct.find({ 
+      manufacturerId: manufacturerId 
+    });
+    
+    console.log('📊 Your manufactured products:', myProducts.length);
+    
+    res.json({
+      manufacturerId,
+      totalRefunds: allRefunds.length,
+      myRefunds: myRefunds.length,
+      myRefundsList: myRefunds.map(r => ({
+        orderNumber: r.orderNumber,
+        amount: r.totalAmount,
+        status: r.status,
+        manufacturerId: r.manufacturerId
+      })),
+      returnOrders: returnOrders.length,
+      myProducts: myProducts.length,
+      debug: 'Check if refunds have correct manufacturerId'
+    });
+    
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 /* ===================== SERVER ===================== */

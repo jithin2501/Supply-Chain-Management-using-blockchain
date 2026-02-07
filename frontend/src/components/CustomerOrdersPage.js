@@ -634,7 +634,73 @@ STATUS: ${order.returnRequest?.status}
                   ))}
                 </div>
               </div>
-
+{/* Delivery OTP Section - SHOWS WHEN ORDER IS NEAR LOCATION */}
+{selectedOrder.status === 'near_location' && selectedOrder.deliveryOTP && (
+  <div className="bg-gradient-to-r from-orange-500 to-red-500 text-white p-6 rounded-2xl shadow-lg">
+    <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center space-x-3">
+        <div className="w-12 h-12 bg-white bg-opacity-20 rounded-full flex items-center justify-center">
+          <Shield size={24} />
+        </div>
+        <div>
+          <h3 className="font-bold text-lg">Delivery OTP</h3>
+          <p className="text-sm opacity-90">Share this with delivery partner</p>
+        </div>
+      </div>
+    </div>
+    
+    {/* OTP Display - Big colorful boxes for each digit */}
+    <div className="bg-white bg-opacity-10 rounded-xl p-6 backdrop-blur-sm">
+      <p className="text-center text-sm mb-3 opacity-90 font-semibold">Your 6-Digit OTP</p>
+      
+      {/* Individual Digit Boxes */}
+      <div className="flex justify-center space-x-2 mb-4">
+        {selectedOrder.deliveryOTP.split('').map((digit, idx) => (
+          <div 
+            key={idx} 
+            className="w-12 h-16 bg-white text-orange-600 rounded-lg flex items-center justify-center text-3xl font-bold shadow-lg transform hover:scale-110 transition"
+          >
+            {digit}
+          </div>
+        ))}
+      </div>
+      
+      {/* Full Number Display */}
+      <div className="text-center mb-4">
+        <p className="text-xs opacity-75 mb-1">Or read this number:</p>
+        <p className="text-2xl font-mono font-bold tracking-wider">
+          {selectedOrder.deliveryOTP}
+        </p>
+      </div>
+      
+      {/* Usage Instructions */}
+      <div className="bg-white bg-opacity-10 rounded-lg p-4">
+        <p className="text-xs font-bold mb-2 flex items-center">
+          <AlertCircle size={16} className="mr-2" />
+          IMPORTANT - How to use OTP:
+        </p>
+        <ul className="text-xs space-y-1.5 opacity-90">
+          <li className="flex items-start">
+            <span className="mr-2">1.</span>
+            <span>Delivery partner will ask for this OTP when they arrive</span>
+          </li>
+          <li className="flex items-start">
+            <span className="mr-2">2.</span>
+            <span>Read out the 6-digit number: <strong className="font-mono text-base">{selectedOrder.deliveryOTP}</strong></span>
+          </li>
+          <li className="flex items-start">
+            <span className="mr-2">3.</span>
+            <span>Order will be marked delivered after successful verification</span>
+          </li>
+          <li className="flex items-start">
+            <span className="mr-2">4.</span>
+            <span><strong>⚠️ Do NOT share OTP before receiving your package!</strong></span>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+)}
               {/* Tracking History */}
               {selectedOrder.trackingHistory && selectedOrder.trackingHistory.length > 0 && (
                 <div>

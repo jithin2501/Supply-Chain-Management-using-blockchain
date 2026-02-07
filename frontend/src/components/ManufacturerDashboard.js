@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
   Factory, Package, ShoppingCart, LogOut, Building2, 
   Truck, Star, ArrowRight, ArrowLeft, ChevronRight, 
   Boxes, ShieldCheck, Cpu, Database, CheckCircle2, History, Link as LinkIcon, Clock, Wallet, AlertCircle, RefreshCw,
-  MapPin, Globe, ExternalLink, X, Plus, Minus, DollarSign, TrendingUp, Receipt, BarChart, Filter, Calendar
+  MapPin, Globe, ExternalLink, X, Plus, Minus, DollarSign, TrendingUp, Receipt, BarChart, Filter, Calendar, RefreshCcw,
+  Bell, CircleAlert, BadgeAlert
 } from 'lucide-react';
 
 const API_URL = 'http://localhost:5000/api';
@@ -40,6 +42,11 @@ export default function ManufacturerDashboard() {
     productsSold: 0,
     monthlyRevenue: 0,
     pendingAmount: 0
+  });
+  const [refundStats, setRefundStats] = useState({
+    pending: 0,
+    total: 0,
+    totalAmount: 0
   });
   const [loading, setLoading] = useState(true);
   const [revenueLoading, setRevenueLoading] = useState(false);
@@ -97,6 +104,7 @@ export default function ManufacturerDashboard() {
 
   const token = localStorage.getItem('token');
   const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const navigate = useNavigate();
 
   const steps = [
     { title: "Connecting MetaMask", icon: Wallet },
@@ -189,6 +197,23 @@ export default function ManufacturerDashboard() {
       console.error('❌ Error loading revenue data:', err);
     } finally {
       setRevenueLoading(false);
+    }
+  }, [token]);
+
+  // Fetch refund stats
+const fetchRefundStats = useCallback(async () => {
+  try {
+    const response = await fetch(`${API_URL}/manufacturer/refunds-summary`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setRefundStats(data.stats || { pending: 0, total: 0, totalAmount: 0 });
+        console.log('📊 Refund stats loaded:', data.stats);
+      }
+    } catch (err) {
+      console.error('❌ Error fetching refund stats:', err);
     }
   }, [token]);
 
@@ -470,8 +495,9 @@ export default function ManufacturerDashboard() {
       fetchPurchases();
     } else if (activeTab === 'revenue') {
       fetchRevenueData();
+      fetchRefundStats(); // Load refund stats when revenue tab is active
     }
-  }, [activeTab, fetchMaterials, fetchPurchases, fetchBoughtMaterials, fetchManufacturedProducts, fetchRevenueData]);
+  }, [activeTab, fetchMaterials, fetchPurchases, fetchBoughtMaterials, fetchManufacturedProducts, fetchRevenueData, fetchRefundStats]);
 
   // Filter revenue data
   useEffect(() => {
@@ -734,8 +760,7 @@ export default function ManufacturerDashboard() {
     const remainingUnits = result.material?.remaining || 
                          (selectedMaterial.quantity - parseInt(manufactureFormData.quantityUsed));
     
-    alert(`✅ Successfully created "${manufactureFormData.name}" using ${manufactureFormData.quantityUsed} units!${remainingUnits > 0 ? ` ${remainingUnits} units remaining.` : ''}`);
-    
+   alert(`✅ Successfully created "${manufactureFormData.name}" using ${manufactureFormData.quantityUsed} units of ${selectedMaterial.productName}!${remainingUnits > 0 ? ` ${remainingUnits} units remaining.` : ''}`);
     // Reset form and close modal
     setShowManufactureModal(false);
     setManufactureFormData({ name: '', description: '', quantity: '', price: '', quantityUsed: '1' });
@@ -1020,6 +1045,20 @@ export default function ManufacturerDashboard() {
               <DollarSign size={20} />
               <span>Revenue & Receipts</span>
             </button>
+            
+            {/* Refund Management Menu Item */}
+            <button 
+              onClick={() => navigate('/manufacturer/refunds')} 
+              className="w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition font-medium text-gray-600 hover:bg-gray-50 relative group"
+            >
+              <RefreshCcw size={20} />
+              <span>Refund Management</span>
+              {refundStats.pending > 0 && (
+                <span className="absolute right-4 bg-red-500 text-white text-xs px-2 py-1 rounded-full animate-pulse">
+                  {refundStats.pending}
+                </span>
+              )}
+            </button>
           </nav>
 
           {/* Wallet Section */}
@@ -1140,7 +1179,10 @@ export default function ManufacturerDashboard() {
             {/* Refresh Revenue Button */}
             {activeTab === 'revenue' && (
               <button
-                onClick={() => fetchRevenueData()}
+                onClick={() => {
+                  fetchRevenueData();
+                  fetchRefundStats();
+                }}
                 className="flex items-center space-x-2 bg-indigo-600 text-white px-6 py-3 rounded-2xl font-bold hover:bg-indigo-700 transition"
               >
                 <RefreshCw size={20} />
@@ -1614,6 +1656,32 @@ export default function ManufacturerDashboard() {
             ) : activeTab === 'revenue' ? (
               /* Revenue & Receipts View */
               <div className="animate-in fade-in duration-500">
+                {/* Pending Refunds Alert Banner */}
+                {refundStats.pending > 0 && (
+                  <div className="bg-red-50 border border-red-200 rounded-2xl p-6 mb-6">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-4">
+                        <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
+                          <RefreshCcw size={24} className="text-red-600" />
+                        </div>
+                        <div>
+                          <h3 className="font-bold text-red-900 text-lg">Pending Refund Requests</h3>
+                          <p className="text-red-700">
+                            You have <span className="font-bold">{refundStats.pending}</span> refund{refundStats.pending > 1 ? 's' : ''} 
+                            worth <span className="font-bold">₹{refundStats.totalAmount?.toFixed(2) || '0.00'}</span> waiting for your action.
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => navigate('/manufacturer/refunds')}
+                        className="px-6 py-3 bg-red-600 text-white rounded-xl font-semibold hover:bg-red-700 transition shadow-md hover:shadow-lg"
+                      >
+                        Manage Refunds
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {/* Revenue Stats Cards */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
                   <div className="bg-gradient-to-br from-green-500 to-emerald-600 text-white p-6 rounded-3xl shadow-lg">
@@ -1646,92 +1714,120 @@ export default function ManufacturerDashboard() {
                     <p className="text-xs opacity-80 mt-2">Current month</p>
                   </div>
                   
-                  <div className="bg-gradient-to-br from-orange-500 to-red-600 text-white p-6 rounded-3xl shadow-lg">
+                  <div className="bg-gradient-to-br from-red-500 to-pink-600 text-white p-6 rounded-3xl shadow-lg">
                     <div className="flex items-center justify-between mb-4">
-                      <Clock size={32} className="opacity-80" />
-                      <AlertCircle size={24} className="opacity-80" />
+                      <RefreshCcw size={32} className="opacity-80" />
+                      <Bell size={24} className="opacity-80" />
                     </div>
-                    <p className="text-sm opacity-90 mb-1">Pending Amount</p>
-                    <p className="text-3xl font-bold">{formatCurrency(revenueStats.pendingAmount)}</p>
-                    <p className="text-xs opacity-80 mt-2">To be received</p>
+                    <p className="text-sm opacity-90 mb-1">Pending Refunds</p>
+                    <p className="text-3xl font-bold">{refundStats.pending}</p>
+                    <p className="text-xs opacity-80 mt-2">₹{refundStats.totalAmount?.toFixed(2) || '0.00'} total</p>
+                    {refundStats.pending > 0 && (
+                      <button
+                        onClick={() => navigate('/manufacturer/refunds')}
+                        className="mt-3 text-xs bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full transition"
+                      >
+                        Process Now →
+                      </button>
+                    )}
                   </div>
                 </div>
 
-                {/* Filters Section */}
-                <div className="bg-white rounded-2xl shadow-sm p-6 mb-6">
-                  <div className="flex items-center justify-between mb-4">
+               {/* Filters Section */}
+               <div className="bg-white rounded-2xl shadow-sm p-6 mb-6">
+                <div className="flex items-center justify-between mb-4">
+                  {/* Left side - Filters info */}
+                  <div className="flex items-center space-x-4">
                     <h3 className="text-lg font-bold text-gray-900">Filters</h3>
                     <div className="flex items-center space-x-2">
                       <Filter size={18} className="text-gray-500" />
                       <span className="text-sm text-gray-600">{revenueData.length} receipts</span>
                     </div>
                   </div>
-                  
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                    {/* Time Range Filter */}
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Time Range</label>
-                      <select
-                        value={revenueFilters.timeRange}
-                        onChange={(e) => handleTimeRangeChange(e.target.value)}
-                        className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                      >
-                        <option value="all">All Time</option>
-                        <option value="today">Today</option>
-                        <option value="week">This Week</option>
-                        <option value="month">This Month</option>
-                        <option value="quarter">This Quarter</option>
-                        <option value="year">This Year</option>
-                      </select>
-                    </div>
-                    
-                    {/* Product Filter */}
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Product</label>
-                      <select
-                        value={revenueFilters.productFilter}
-                        onChange={(e) => handleProductFilterChange(e.target.value)}
-                        className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                      >
-                        <option value="all">All Products</option>
-                        {manufacturedProducts.map(product => (
-                          <option key={product._id} value={product._id}>{product.name}</option>
-                        ))}
-                      </select>
-                    </div>
-                    
-                    {/* Status Filter */}
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Status</label>
-                      <select
-                        value={revenueFilters.statusFilter}
-                        onChange={(e) => handleStatusFilterChange(e.target.value)}
-                        className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                      >
-                        <option value="all">All Status</option>
-                        <option value="delivered">Delivered</option>
-                        <option value="pending">Pending</option>
-                        <option value="returned">Returned</option>
-                        <option value="cancelled">Cancelled</option>
-                      </select>
-                    </div>
-                    
-                    {/* Sort By */}
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Sort By</label>
-                      <select
-                        value={revenueFilters.sortBy}
-                        onChange={(e) => handleSortChange(e.target.value)}
-                        className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                      >
-                        <option value="date_desc">Date (Newest First)</option>
-                        <option value="date_asc">Date (Oldest First)</option>
-                        <option value="amount_desc">Amount (High to Low)</option>
-                        <option value="amount_asc">Amount (Low to High)</option>
-                      </select>
-                    </div>
+                
+                  {/* Right side - Refunds Navigation Button with Badge */}
+                  <div className="relative">
+                    <button
+                      onClick={() => navigate('/manufacturer/refunds')}
+                      className="flex items-center space-x-2 px-4 py-2 bg-red-600 text-white rounded-xl font-medium hover:bg-red-700 transition shadow-md hover:shadow-lg relative"
+                    >
+                      <RefreshCcw size={18} />
+                      <span>View Refunds</span>
+                      {refundStats.pending > 0 && (
+                        <span className="absolute -top-2 -right-2 bg-yellow-400 text-red-900 text-xs font-bold px-2 py-1 rounded-full animate-pulse">
+                          {refundStats.pending} Pending
+                        </span>
+                      )}
+                    </button>
                   </div>
                 </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  {/* Time Range Filter */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Time Range</label>
+                    <select
+                      value={revenueFilters.timeRange}
+                      onChange={(e) => handleTimeRangeChange(e.target.value)}
+                      className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                    >
+                      <option value="all">All Time</option>
+                      <option value="today">Today</option>
+                      <option value="week">This Week</option>
+                      <option value="month">This Month</option>
+                      <option value="quarter">This Quarter</option>
+                      <option value="year">This Year</option>
+                    </select>
+                  </div>
+                  
+                  {/* Product Filter */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Product</label>
+                    <select
+                      value={revenueFilters.productFilter}
+                      onChange={(e) => handleProductFilterChange(e.target.value)}
+                      className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                    >
+                      <option value="all">All Products</option>
+                      {manufacturedProducts.map(product => (
+                        <option key={product._id} value={product._id}>{product.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  
+                  {/* Status Filter */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Status</label>
+                    <select
+                      value={revenueFilters.statusFilter}
+                      onChange={(e) => handleStatusFilterChange(e.target.value)}
+                      className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                    >
+                      <option value="all">All Status</option>
+                      <option value="delivered">Delivered</option>
+                      <option value="pending">Pending</option>
+                      <option value="returned">Returned</option>
+                      <option value="cancelled">Cancelled</option>
+                    </select>
+                  </div>
+                  
+                  {/* Sort By */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Sort By</label>
+                    <select
+                      value={revenueFilters.sortBy}
+                      onChange={(e) => handleSortChange(e.target.value)}
+                      className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                    >
+                      <option value="date_desc">Date (Newest First)</option>
+                      <option value="date_asc">Date (Oldest First)</option>
+                      <option value="amount_desc">Amount (High to Low)</option>
+                      <option value="amount_asc">Amount (Low to High)</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
 
                 {/* Receipts Table */}
                 {revenueLoading ? (
