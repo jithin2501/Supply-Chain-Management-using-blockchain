@@ -5,7 +5,8 @@ import {
   Phone, Mail, ChevronRight, CheckCircle2, Home, Key,
   RefreshCw, Info, X, Calendar, DollarSign, FileText,
   ClipboardCheck, Shield, History, ExternalLink, Download,
-  ThumbsUp, ThumbsDown, Check, X as XIcon, Loader2
+  ThumbsUp, ThumbsDown, Check, X as XIcon, Loader2, Filter,
+  Eye
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -24,6 +25,7 @@ export default function CustomerOrdersPage() {
   const [returnReason, setReturnReason] = useState('');
   const [returnStatus, setReturnStatus] = useState({});
   const [processingReturn, setProcessingReturn] = useState(false);
+  const [activeTab, setActiveTab] = useState('all'); // all, active, delivered, returns
 
   const token = localStorage.getItem('token');
   const user = JSON.parse(localStorage.getItem('user') || '{}');
@@ -70,6 +72,28 @@ export default function CustomerOrdersPage() {
     }
   };
 
+  const getFilteredOrders = () => {
+    switch (activeTab) {
+      case 'active':
+        return orders.filter(order => 
+          ['pending', 'confirmed', 'processing', 'out_for_delivery', 'near_location'].includes(order.status)
+        );
+      case 'delivered':
+        return orders.filter(order => order.status === 'delivered');
+      case 'returns':
+        return orders.filter(order => 
+          order.status === 'return_requested' || 
+          order.status === 'returned' ||
+          order.status === 'out_for_pickup' ||
+          order.status === 'pickup_completed' ||
+          order.status === 'refund_requested' ||
+          (order.returnRequest && order.returnRequest.requested)
+        );
+      default:
+        return orders;
+    }
+  };
+
   const getStatusColor = (status) => {
     const colors = {
       pending: 'bg-yellow-100 text-yellow-800',
@@ -81,10 +105,9 @@ export default function CustomerOrdersPage() {
       cancelled: 'bg-red-100 text-red-800',
       returned: 'bg-gray-100 text-gray-800',
       return_requested: 'bg-red-100 text-red-800',
-      return_approved: 'bg-blue-100 text-blue-800',
-      return_rejected: 'bg-red-100 text-red-800',
-      return_picked_up: 'bg-purple-100 text-purple-800',
-      return_completed: 'bg-green-100 text-green-800'
+      out_for_pickup: 'bg-purple-100 text-purple-800',
+      pickup_completed: 'bg-blue-100 text-blue-800',
+      refund_requested: 'bg-orange-100 text-orange-800'
     };
     return colors[status] || 'bg-gray-100 text-gray-800';
   };
@@ -100,8 +123,8 @@ export default function CustomerOrdersPage() {
       cancelled: XCircle,
       returned: RotateCcw,
       return_requested: RotateCcw,
-      return_approved: CheckCircle,
-      return_rejected: XCircle
+      out_for_pickup: Truck,
+      pickup_completed: CheckCircle
     };
     return icons[status] || Clock;
   };
@@ -159,11 +182,8 @@ export default function CustomerOrdersPage() {
       setReturnReason('');
       setProcessingReturn(false);
       
-      // Fetch updated orders and return status
       fetchOrders();
       fetchReturnStatus(selectedOrder._id);
-      
-      // Show return status modal
       setShowReturnStatusModal(true);
       
     } catch (error) {
@@ -187,54 +207,17 @@ export default function CustomerOrdersPage() {
         }
       });
 
-      const data = await response.json();
-      
       if (!response.ok) {
-        throw new Error(data.message || 'Failed to cancel return request');
+        const data = await response.json();
+        throw new Error(data.message || 'Failed to cancel return');
       }
 
-      alert('Return request cancelled successfully!');
-      fetchOrders();
+      alert('Return request cancelled successfully');
       setShowReturnStatusModal(false);
+      fetchOrders();
     } catch (error) {
-      alert(`Failed to cancel return request: ${error.message}`);
+      alert(`Failed to cancel return: ${error.message}`);
     }
-  };
-
-  const isReturnEligible = (order) => {
-    if (order.status !== 'delivered') return false;
-    
-    if (!order.deliveredAt) return false;
-    
-    const deliveredDate = new Date(order.deliveredAt);
-    const currentDate = new Date();
-    const daysDiff = Math.floor((currentDate - deliveredDate) / (1000 * 60 * 60 * 24));
-    
-    return daysDiff <= 14;
-  };
-
-  const getReturnStatusText = (returnRequest) => {
-    if (!returnRequest || !returnRequest.requested) return null;
-    
-    const status = returnRequest.status || 'pending';
-    const statusMap = {
-      'pending': { text: 'Pending Review', color: 'text-yellow-600', bg: 'bg-yellow-100', icon: Clock },
-      'approved': { text: 'Approved', color: 'text-green-600', bg: 'bg-green-100', icon: CheckCircle },
-      'rejected': { text: 'Rejected', color: 'text-red-600', bg: 'bg-red-100', icon: XCircle },
-      'pickup_scheduled': { text: 'Pickup Scheduled', color: 'text-blue-600', bg: 'bg-blue-100', icon: Calendar },
-      'picked_up': { text: 'Picked Up', color: 'text-purple-600', bg: 'bg-purple-100', icon: Package },
-      'in_transit': { text: 'In Transit', color: 'text-indigo-600', bg: 'bg-indigo-100', icon: Truck },
-      'received_at_warehouse': { text: 'Received at Warehouse', color: 'text-teal-600', bg: 'bg-teal-100', icon: Home },
-      'refund_initiated': { text: 'Refund Initiated', color: 'text-orange-600', bg: 'bg-orange-100', icon: DollarSign },
-      'refund_completed': { text: 'Refund Completed', color: 'text-green-600', bg: 'bg-green-100', icon: CheckCircle2 }
-    };
-    
-    return statusMap[status] || { 
-      text: 'Pending', 
-      color: 'text-yellow-600', 
-      bg: 'bg-yellow-100', 
-      icon: Clock 
-    };
   };
 
   const formatDate = (dateString) => {
@@ -254,184 +237,259 @@ export default function CustomerOrdersPage() {
     }
   };
 
-  const generateReturnInstructions = (order) => {
-    if (!order.returnRequest) return '';
+  const getReturnStatusText = (returnRequest) => {
+    if (!returnRequest) return null;
     
-    const statusInfo = getReturnStatusText(order.returnRequest);
+    const statusMap = {
+      'pending': { text: 'Pending Approval', color: 'text-yellow-800', bg: 'bg-yellow-100' },
+      'approved': { text: 'Approved', color: 'text-green-800', bg: 'bg-green-100' },
+      'rejected': { text: 'Rejected', color: 'text-red-800', bg: 'bg-red-100' },
+      'out_for_pickup': { text: 'Out for Pickup', color: 'text-blue-800', bg: 'bg-blue-100' },
+      'pickup_near_location': { text: 'Near Location', color: 'text-purple-800', bg: 'bg-purple-100' },
+      'pickup_otp_generated': { text: 'OTP Generated', color: 'text-indigo-800', bg: 'bg-indigo-100' },
+      'pickup_completed': { text: 'Pickup Completed', color: 'text-green-800', bg: 'bg-green-100' },
+      'refund_requested': { text: 'Refund Requested', color: 'text-orange-800', bg: 'bg-orange-100' },
+      'refund_approved': { text: 'Refund Approved', color: 'text-green-800', bg: 'bg-green-100' },
+      'refund_processing': { text: 'Refund Processing', color: 'text-blue-800', bg: 'bg-blue-100' },
+      'refund_completed': { text: 'Refund Completed', color: 'text-green-800', bg: 'bg-green-100' }
+    };
     
-    const instructions = `
-      RETURN INSTRUCTIONS - ORDER #${order.orderNumber}
-      
-      Customer: ${order.deliveryAddress?.name || 'N/A'}
-      Address: ${order.deliveryAddress?.street || 'N/A'}, ${order.deliveryAddress?.city || 'N/A'}
-      Phone: ${order.deliveryAddress?.phone || 'N/A'}
-      
-      Return Requested: ${formatDate(order.returnRequest.requestedAt)}
-      Reason: ${order.returnRequest.reason || 'N/A'}
-      Status: ${statusInfo?.text || 'Pending'}
-      ${order.returnRequest.pickupSchedule?.date ? `Pickup Date: ${order.returnRequest.pickupSchedule.date}` : ''}
-      ${order.returnRequest.pickupSchedule?.time ? `Pickup Time: ${order.returnRequest.pickupSchedule.time}` : ''}
-      
-      Instructions:
-      1. Keep the product in original packaging
-      2. Include all accessories and documentation
-      3. Do not remove any labels or tags
-      4. Wait for delivery partner to contact you for pickup
-      5. Have your ID ready for verification
-      
-      Important Notes:
-      - Return pickup is FREE of charge
-      - Refund will be processed within 5-7 business days after pickup
-      - Contact customer support for any queries
-      
-      Generated on: ${new Date().toLocaleDateString()}
-    `;
-    
-    return instructions;
+    return statusMap[returnRequest.status] || { text: returnRequest.status, color: 'text-gray-800', bg: 'bg-gray-100' };
   };
 
   const downloadReturnInstructions = (order) => {
-    const instructions = generateReturnInstructions(order);
+    const instructions = `
+RETURN INSTRUCTIONS
+Order #${order.orderNumber}
+Generated: ${new Date().toLocaleString()}
+
+RETURN DETAILS:
+- Order Total: ₹${order.totalAmount}
+- Return Reason: ${order.returnRequest?.reason}
+- Requested: ${formatDate(order.returnRequest?.requestedAt)}
+
+PICKUP ADDRESS:
+${order.deliveryAddress?.name}
+${order.deliveryAddress?.street}
+${order.deliveryAddress?.city}, ${order.deliveryAddress?.state} ${order.deliveryAddress?.pincode}
+Phone: ${order.deliveryAddress?.phone}
+
+INSTRUCTIONS:
+1. Keep product in original packaging with all accessories
+2. Do not remove any labels, tags, or warranty cards
+3. Delivery partner will contact you for pickup scheduling
+4. Have your ID ready for verification during pickup
+5. Refund will be processed within 5-7 business days after pickup
+
+STATUS: ${order.returnRequest?.status}
+    `;
+    
     const blob = new Blob([instructions], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `Return_Instructions_${order.orderNumber}.txt`;
-    document.body.appendChild(a);
     a.click();
-    document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
 
-  const getDaysSinceDelivery = (deliveredAt) => {
-    if (!deliveredAt) return null;
-    try {
-      const deliveredDate = new Date(deliveredAt);
-      if (isNaN(deliveredDate.getTime())) return null;
-      const currentDate = new Date();
-      return Math.floor((currentDate - deliveredDate) / (1000 * 60 * 60 * 24));
-    } catch (error) {
-      return null;
-    }
+  const getTabCounts = () => {
+    return {
+      all: orders.length,
+      active: orders.filter(o => ['pending', 'confirmed', 'processing', 'out_for_delivery', 'near_location'].includes(o.status)).length,
+      delivered: orders.filter(o => o.status === 'delivered').length,
+      returns: orders.filter(o => 
+        o.status === 'return_requested' || 
+        o.status === 'returned' ||
+        o.status === 'out_for_pickup' ||
+        o.status === 'pickup_completed' ||
+        o.status === 'refund_requested' ||
+        (o.returnRequest && o.returnRequest.requested)
+      ).length
+    };
   };
+
+  const isReturnEligible = (order) => {
+    if (order.status !== 'delivered') return false;
+    if (order.returnRequest && order.returnRequest.requested) return false;
+    
+    if (!order.deliveredAt) return false;
+    
+    const deliveredDate = new Date(order.deliveredAt);
+    const currentDate = new Date();
+    const daysDiff = Math.floor((currentDate - deliveredDate) / (1000 * 60 * 60 * 24));
+    
+    return daysDiff <= 14;
+  };
+
+  const filteredOrders = getFilteredOrders();
+  const tabCounts = getTabCounts();
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
         <div className="text-center">
           <Loader2 className="animate-spin mx-auto mb-4 text-blue-600" size={48} />
-          <p className="text-gray-600">Loading your orders...</p>
+          <p className="text-gray-700 font-medium">Loading your orders...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
       {/* Header */}
-      <div className="bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-6 py-4">
-          <div className="flex items-center justify-between">
+      <div className="bg-white shadow-sm border-b sticky top-0 z-10">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between py-4">
             <div className="flex items-center space-x-4">
               <button
                 onClick={() => navigate('/main')}
                 className="p-2 hover:bg-gray-100 rounded-lg transition"
               >
-                <ArrowLeft size={24} />
+                <ArrowLeft size={24} className="text-gray-600" />
               </button>
               <div>
                 <h1 className="text-2xl font-bold text-gray-900">My Orders</h1>
-                <p className="text-sm text-gray-600">{orders.length} total orders</p>
+                <p className="text-sm text-gray-500">Track and manage your orders</p>
               </div>
             </div>
             <button
-              onClick={() => navigate('/customer/products')}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+              onClick={fetchOrders}
+              className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
             >
-              Continue Shopping
+              <RefreshCw size={18} />
+              <span>Refresh</span>
             </button>
+          </div>
+
+          {/* Tabs */}
+          <div className="flex space-x-1 border-b overflow-x-auto">
+            {[
+              { id: 'all', label: 'All Orders', icon: Package },
+              { id: 'active', label: 'Active', icon: Truck },
+              { id: 'delivered', label: 'Delivered', icon: CheckCircle },
+              { id: 'returns', label: 'Returns', icon: RotateCcw }
+            ].map(tab => {
+              const Icon = tab.icon;
+              const count = tabCounts[tab.id];
+              const isActive = activeTab === tab.id;
+              
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex items-center space-x-2 px-6 py-3 border-b-2 transition whitespace-nowrap ${
+                    isActive
+                      ? 'border-blue-600 text-blue-600 bg-blue-50'
+                      : 'border-transparent text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                  }`}
+                >
+                  <Icon size={18} />
+                  <span className="font-medium">{tab.label}</span>
+                  <span className={`px-2 py-0.5 text-xs rounded-full ${
+                    isActive ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'
+                  }`}>
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
 
       {/* Orders List */}
-      <div className="max-w-7xl mx-auto px-6 py-8">
-        {orders.length === 0 ? (
-          <div className="text-center py-20">
-            <Package size={64} className="mx-auto text-gray-400 mb-4" />
-            <h2 className="text-2xl font-bold text-gray-900 mb-2">No orders yet</h2>
-            <p className="text-gray-600 mb-6">Start shopping to see your orders here</p>
-            <button
-              onClick={() => navigate('/customer/products')}
-              className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
-            >
-              Browse Products
-            </button>
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {filteredOrders.length === 0 ? (
+          <div className="bg-white rounded-2xl shadow-md p-12 text-center">
+            <Package size={64} className="mx-auto text-gray-300 mb-4" />
+            <h3 className="text-xl font-semibold text-gray-700 mb-2">
+              No orders found
+            </h3>
+            <p className="text-gray-500 mb-6">
+              {activeTab === 'all' ? "You haven't placed any orders yet." : 
+               activeTab === 'active' ? "You don't have any active orders." :
+               activeTab === 'delivered' ? "No delivered orders yet." :
+               "No return requests."}
+            </p>
+            {activeTab === 'all' && (
+              <button
+                onClick={() => navigate('/customer/products')}
+                className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+              >
+                Browse Products
+              </button>
+            )}
           </div>
         ) : (
-          <div className="space-y-6">
-            {orders.map((order) => {
+          <div className="space-y-4">
+            {filteredOrders.map(order => {
               const StatusIcon = getStatusIcon(order.status);
               const canReturn = isReturnEligible(order);
-              const canSubmitFeedback = order.status === 'delivered';
-              const returnStatusInfo = getReturnStatusText(order.returnRequest);
-              const hasReturnRequest = order.returnRequest && order.returnRequest.requested;
-              const daysSinceDelivery = getDaysSinceDelivery(order.deliveredAt);
+              const hasReturn = order.returnRequest?.requested;
+              const canSubmitFeedback = order.status === 'delivered' && !hasReturn;
               
-              const reviewedProductIds = order.feedback?.map(f => f.productId?.toString()) || [];
-              const unreviewedProducts = order.items
-                .filter(item => !reviewedProductIds.includes(item.product?._id?.toString()))
-                .map(item => item.product);
-
               return (
-                <div key={order._id} className="bg-white rounded-2xl shadow-sm overflow-hidden">
-                  {/* Order Header */}
-                  <div className="p-6 border-b border-gray-200">
-                    <div className="flex items-start justify-between mb-4">
-                      <div>
-                        <div className="flex items-center space-x-3 mb-2">
-                          <h3 className="text-lg font-bold text-gray-900">Order #{order.orderNumber}</h3>
-                          <span className={`px-3 py-1 rounded-full text-xs font-semibold ${getStatusColor(order.status)}`}>
-                            {order.status.replace(/_/g, ' ').toUpperCase()}
-                          </span>
-                          {hasReturnRequest && returnStatusInfo && (
-                            <span className={`px-3 py-1 rounded-full text-xs font-semibold ${returnStatusInfo.bg} ${returnStatusInfo.color}`}>
-                              Return: {returnStatusInfo.text}
-                            </span>
-                          )}
+                <div key={order._id} className="bg-white rounded-xl shadow-md hover:shadow-lg transition overflow-hidden">
+                  <div className="p-6">
+                    {/* Order Header */}
+                    <div className="flex flex-wrap items-center justify-between mb-4 pb-4 border-b">
+                      <div className="flex items-center space-x-4 mb-2 sm:mb-0">
+                        <div className="bg-blue-100 p-3 rounded-lg">
+                          <Package className="text-blue-600" size={24} />
                         </div>
-                        <p className="text-sm text-gray-600">
-                          Placed on {formatDate(order.createdAt)}
-                          {order.deliveredAt && (
-                            <span className="ml-4">
-                              • Delivered on {formatDate(order.deliveredAt)}
-                              {daysSinceDelivery !== null && (
-                                <span className="ml-2">({daysSinceDelivery} days ago)</span>
-                              )}
-                            </span>
-                          )}
-                        </p>
+                        <div>
+                          <p className="text-sm text-gray-500">Order Number</p>
+                          <p className="font-bold text-lg text-gray-900">#{order.orderNumber}</p>
+                        </div>
                       </div>
-                      <div className="text-right">
-                        <p className="text-2xl font-bold text-gray-900">₹{order.totalAmount?.toFixed(2) || '0.00'}</p>
-                        <p className="text-sm text-gray-600">{order.items?.length || 0} item(s)</p>
+                      
+                      <div className="flex items-center space-x-3">
+                        <span className={`px-4 py-2 rounded-full text-sm font-semibold flex items-center space-x-2 ${getStatusColor(order.status)}`}>
+                          <StatusIcon size={16} />
+                          <span>{order.status.replace(/_/g, ' ').toUpperCase()}</span>
+                        </span>
                       </div>
                     </div>
 
-                    {/* Return Request Banner */}
-                    {hasReturnRequest && (
-                      <div className={`mb-4 p-4 rounded-lg ${returnStatusInfo?.bg} border ${returnStatusInfo?.color.replace('text', 'border')}`}>
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center space-x-3">
-                            {returnStatusInfo?.icon && <returnStatusInfo.icon size={20} className={returnStatusInfo?.color} />}
-                            <div>
-                              <p className="font-semibold">Return Request Submitted</p>
-                              <p className="text-sm">
-                                <span className="font-medium">Reason:</span> {order.returnRequest.reason} • 
-                                <span className="font-medium ml-2">Status:</span> {returnStatusInfo?.text} • 
-                                <span className="font-medium ml-2">Requested:</span> {formatDate(order.returnRequest.requestedAt)}
-                              </p>
-                            </div>
+                    {/* Order Info Grid */}
+                    <div className="grid md:grid-cols-3 gap-4 mb-4">
+                      <div className="flex items-center space-x-3">
+                        <Calendar className="text-gray-400" size={20} />
+                        <div>
+                          <p className="text-xs text-gray-500">Order Date</p>
+                          <p className="font-medium text-gray-900">{formatDate(order.createdAt)}</p>
+                        </div>
+                      </div>
+                      
+                      <div className="flex items-center space-x-3">
+                        <DollarSign className="text-green-500" size={20} />
+                        <div>
+                          <p className="text-xs text-gray-500">Total Amount</p>
+                          <p className="font-bold text-lg text-green-600">₹{order.totalAmount?.toFixed(2)}</p>
+                        </div>
+                      </div>
+                      
+                      <div className="flex items-center space-x-3">
+                        <Package className="text-gray-400" size={20} />
+                        <div>
+                          <p className="text-xs text-gray-500">Items</p>
+                          <p className="font-medium text-gray-900">{order.items?.length || 0} item(s)</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Return Status Alert */}
+                    {hasReturn && (
+                      <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-4">
+                        <div className="flex items-start space-x-3">
+                          <RotateCcw className="text-orange-600 flex-shrink-0 mt-0.5" size={20} />
+                          <div className="flex-1">
+                            <p className="font-semibold text-orange-900">Return Request Active</p>
+                            <p className="text-sm text-orange-700 mt-1">
+                              Status: {getReturnStatusText(order.returnRequest)?.text}
+                            </p>
                           </div>
                           <button
                             onClick={() => {
@@ -439,175 +497,51 @@ export default function CustomerOrdersPage() {
                               fetchReturnStatus(order._id);
                               setShowReturnStatusModal(true);
                             }}
-                            className="px-3 py-1 bg-white rounded text-sm font-medium hover:bg-gray-50"
+                            className="text-orange-600 hover:text-orange-700 font-medium text-sm whitespace-nowrap"
                           >
-                            View Details
+                            View Details →
                           </button>
                         </div>
                       </div>
                     )}
 
-                    {/* Delivery OTP Section */}
-                    {(order.status === 'out_for_delivery' || order.status === 'near_location') && order.deliveryOTP && (
-                      <div className="mb-4 p-4 bg-purple-50 border border-purple-200 rounded-lg">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center space-x-3">
-                            <Key className="text-purple-600" size={24} />
-                            <div>
-                              <p className="font-semibold text-purple-900">Delivery Verification OTP</p>
-                              <p className="text-sm text-purple-700">
-                                Provide this OTP to the delivery partner when they arrive
-                              </p>
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-3xl font-bold text-purple-900 tracking-wider">
-                              {order.deliveryOTP}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Products in Order */}
-                    <div className="space-y-3">
-                      {order.items?.map((item, idx) => {
-                        const isReviewed = reviewedProductIds.includes(item.product?._id?.toString());
-                        return (
-                          <div key={idx} className="flex items-center space-x-4 p-3 bg-gray-50 rounded-lg">
-                            <img
-                              src={item.product?.image}
-                              alt={item.product?.name}
-                              className="w-16 h-16 object-cover rounded-lg"
-                              onError={(e) => {
-                                e.target.src = 'https://via.placeholder.com/64x64?text=Product';
-                              }}
-                            />
-                            <div className="flex-1">
-                              <h4 className="font-semibold text-gray-900">{item.product?.name || 'Product'}</h4>
-                              <p className="text-sm text-gray-600">Quantity: {item.quantity} × ₹{item.price?.toFixed(2) || '0.00'}</p>
-                              
-                              {/* Show if reviewed */}
-                              {isReviewed && (
-                                <div className="flex items-center mt-1">
-                                  <Star size={14} className="text-yellow-400 fill-yellow-400 mr-1" />
-                                  <span className="text-xs text-gray-600">Reviewed</span>
-                                </div>
-                              )}
-                            </div>
-                            <p className="font-semibold text-gray-900">₹{((item.quantity || 0) * (item.price || 0)).toFixed(2)}</p>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Delivery Information */}
-                  <div className="p-6 bg-gray-50 border-b border-gray-200">
-                    <h4 className="font-semibold text-gray-900 mb-3 flex items-center">
-                      <MapPin size={18} className="mr-2 text-blue-600" />
-                      Delivery Address
-                    </h4>
-                    <div className="bg-white p-4 rounded-lg">
-                      <p className="font-medium text-gray-900">{order.deliveryAddress?.name || 'N/A'}</p>
-                      <p className="text-gray-600 text-sm mt-1">{order.deliveryAddress?.street || 'N/A'}</p>
-                      <p className="text-gray-600 text-sm">
-                        {order.deliveryAddress?.city || 'N/A'}, {order.deliveryAddress?.state || 'N/A'} {order.deliveryAddress?.pincode || 'N/A'}
-                      </p>
-                      <p className="text-gray-600 text-sm mt-2 flex items-center">
-                        <Phone size={14} className="mr-2" />
-                        {order.deliveryAddress?.phone || 'N/A'}
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Tracking Timeline */}
-                  <div className="p-6 border-b border-gray-200">
-                    <h4 className="font-semibold text-gray-900 mb-4 flex items-center">
-                      <Truck size={18} className="mr-2 text-blue-600" />
-                      Order Tracking
-                    </h4>
-                    <div className="space-y-4">
-                      {order.trackingHistory?.map((event, idx) => (
-                        <div key={idx} className="flex items-start space-x-4">
-                          <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                            event.status === order.status ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600'
-                          }`}>
-                            <StatusIcon size={20} />
-                          </div>
-                          <div className="flex-1">
-                            <p className="font-semibold text-gray-900 capitalize">{event.status?.replace(/_/g, ' ') || 'Update'}</p>
-                            <p className="text-sm text-gray-600">{event.message || 'No message'}</p>
-                            <p className="text-xs text-gray-500 mt-1">
-                              {formatDate(event.timestamp)}
-                            </p>
-                            {event.deliveryPartner && (
-                              <p className="text-xs text-gray-600 mt-1">
-                                Delivery Partner: {event.deliveryPartner.name} - {event.deliveryPartner.phone}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Action Buttons */}
-                  <div className="p-6 bg-white">
-                    <div className="flex flex-wrap gap-3">
-                      {canSubmitFeedback && unreviewedProducts.length > 0 && (
-                        <button
-                          onClick={() => {
-                            setSelectedOrder(order);
-                            setSelectedProduct(unreviewedProducts[0]);
-                            setShowFeedbackModal(true);
-                          }}
-                          className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition flex items-center"
-                        >
-                          <Star size={18} className="mr-2" />
-                          Rate & Review ({unreviewedProducts.length} items)
-                        </button>
-                      )}
-
-                      {canReturn && !hasReturnRequest && (
+                    {/* Action Buttons */}
+                    <div className="flex flex-wrap gap-3 mt-4 pt-4 border-t">
+                      <button
+                        onClick={() => setSelectedOrder(order)}
+                        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition flex items-center"
+                      >
+                        <Eye size={16} className="mr-2" />
+                        View Details
+                      </button>
+                      
+                      {canReturn && (
                         <button
                           onClick={() => {
                             setSelectedOrder(order);
                             setShowReturnModal(true);
                           }}
-                          className="px-6 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition flex items-center"
+                          className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition flex items-center"
                         >
-                          <RotateCcw size={18} className="mr-2" />
-                          Return Order
+                          <RotateCcw size={16} className="mr-2" />
+                          Request Return
                         </button>
                       )}
-
-                      {hasReturnRequest && (
+                      
+                      {canSubmitFeedback && (
                         <button
                           onClick={() => {
                             setSelectedOrder(order);
-                            fetchReturnStatus(order._id);
-                            setShowReturnStatusModal(true);
+                            if (order.items && order.items.length > 0) {
+                              setSelectedProduct(order.items[0]?.product);
+                            }
+                            setShowFeedbackModal(true);
                           }}
-                          className="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition flex items-center"
+                          className="px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition flex items-center"
                         >
-                          <History size={18} className="mr-2" />
-                          View Return Status
+                          <Star size={16} className="mr-2" />
+                          Rate Product
                         </button>
-                      )}
-
-                      {order.feedback?.length > 0 && (
-                        <div className="px-6 py-3 bg-green-100 rounded-lg flex items-center text-green-800">
-                          <CheckCircle size={18} className="mr-2" />
-                          Feedback Submitted ({order.feedback.length}/{order.items?.length || 0})
-                        </div>
-                      )}
-
-                      {order.status === 'delivered' && order.feedback?.length === order.items?.length && (
-                        <div className="px-6 py-3 bg-gray-100 rounded-lg flex items-center text-gray-600">
-                          <CheckCircle size={18} className="mr-2" />
-                          All Items Reviewed
-                        </div>
                       )}
                     </div>
                   </div>
@@ -618,54 +552,178 @@ export default function CustomerOrdersPage() {
         )}
       </div>
 
+      {/* Order Details Modal */}
+      {selectedOrder && !showFeedbackModal && !showReturnModal && !showReturnStatusModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white border-b p-6 z-10">
+              <div className="flex items-center justify-between">
+                <h2 className="text-2xl font-bold text-gray-900">Order Details</h2>
+                <button
+                  onClick={() => setSelectedOrder(null)}
+                  className="p-2 hover:bg-gray-100 rounded-lg transition"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-6">
+              {/* Order Info */}
+              <div className="grid md:grid-cols-2 gap-6">
+                <div className="bg-gray-50 p-4 rounded-lg">
+                  <h3 className="font-semibold text-gray-900 mb-3">Order Information</h3>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Order Number:</span>
+                      <span className="font-medium">#{selectedOrder.orderNumber}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Order Date:</span>
+                      <span className="font-medium">{formatDate(selectedOrder.createdAt)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Status:</span>
+                      <span className={`px-2 py-1 rounded text-xs font-semibold ${getStatusColor(selectedOrder.status)}`}>
+                        {selectedOrder.status.replace(/_/g, ' ').toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Total Amount:</span>
+                      <span className="font-bold text-green-600">₹{selectedOrder.totalAmount?.toFixed(2)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-gray-50 p-4 rounded-lg">
+                  <h3 className="font-semibold text-gray-900 mb-3">Delivery Address</h3>
+                  <div className="space-y-1 text-sm">
+                    <p className="font-medium">{selectedOrder.deliveryAddress?.name}</p>
+                    <p className="text-gray-600">{selectedOrder.deliveryAddress?.street}</p>
+                    <p className="text-gray-600">
+                      {selectedOrder.deliveryAddress?.city}, {selectedOrder.deliveryAddress?.state} {selectedOrder.deliveryAddress?.pincode}
+                    </p>
+                    <p className="text-gray-600 flex items-center mt-2">
+                      <Phone size={14} className="mr-2" />
+                      {selectedOrder.deliveryAddress?.phone}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Order Items */}
+              <div>
+                <h3 className="font-semibold text-gray-900 mb-3">Order Items</h3>
+                <div className="space-y-3">
+                  {selectedOrder.items?.map((item, idx) => (
+                    <div key={idx} className="flex items-center space-x-4 p-4 bg-gray-50 rounded-lg">
+                      <img 
+                        src={item.product?.image || '/placeholder.png'} 
+                        alt={item.product?.name}
+                        className="w-20 h-20 object-cover rounded-lg"
+                      />
+                      <div className="flex-1">
+                        <h4 className="font-medium text-gray-900">{item.product?.name}</h4>
+                        <p className="text-sm text-gray-600">Quantity: {item.quantity}</p>
+                        <p className="text-sm font-semibold text-gray-900">₹{item.price?.toFixed(2)} each</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-bold text-lg text-gray-900">₹{(item.price * item.quantity)?.toFixed(2)}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Tracking History */}
+              {selectedOrder.trackingHistory && selectedOrder.trackingHistory.length > 0 && (
+                <div>
+                  <h3 className="font-semibold text-gray-900 mb-3 flex items-center">
+                    <History size={18} className="mr-2 text-blue-600" />
+                    Order Timeline
+                  </h3>
+                  <div className="space-y-4">
+                    {selectedOrder.trackingHistory.map((event, idx) => (
+                      <div key={idx} className="flex items-start space-x-4">
+                        <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                          <CheckCircle size={20} className="text-blue-600" />
+                        </div>
+                        <div className="flex-1">
+                          <p className="font-semibold text-gray-900 capitalize">
+                            {event.status?.replace(/_/g, ' ') || 'Update'}
+                          </p>
+                          <p className="text-sm text-gray-600">{event.message || 'No message'}</p>
+                          <p className="text-xs text-gray-500 mt-1">
+                            {formatDate(event.timestamp)}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="sticky bottom-0 bg-gray-50 border-t p-6">
+              <button
+                onClick={() => setSelectedOrder(null)}
+                className="w-full px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition font-medium"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Feedback Modal */}
       {showFeedbackModal && selectedOrder && selectedProduct && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-8">
-            <h2 className="text-2xl font-bold text-gray-900 mb-4">Rate Your Product</h2>
-            
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-2xl font-bold text-gray-900">Rate Product</h2>
+              <button
+                onClick={() => {
+                  setShowFeedbackModal(false);
+                  setFeedback({ rating: 0, comment: '' });
+                }}
+                className="p-2 hover:bg-gray-100 rounded-lg transition"
+              >
+                <X size={24} />
+              </button>
+            </div>
+
             <div className="mb-6">
-              <div className="flex items-center space-x-4 mb-4">
-                <img
-                  src={selectedProduct.image}
-                  alt={selectedProduct.name}
-                  className="w-16 h-16 object-cover rounded-lg"
-                  onError={(e) => {
-                    e.target.src = 'https://via.placeholder.com/64x64?text=Product';
-                  }}
-                />
-                <div>
-                  <h3 className="font-semibold text-gray-900">{selectedProduct.name || 'Product'}</h3>
-                  <p className="text-sm text-gray-600">From Order #{selectedOrder.orderNumber}</p>
-                </div>
-              </div>
+              <p className="text-gray-600 mb-4">How would you rate {selectedProduct?.name}?</p>
               
-              <p className="text-gray-700 font-medium mb-3">How would you rate this product?</p>
-              <div className="flex justify-center space-x-2">
+              <div className="flex space-x-2 mb-6">
                 {[1, 2, 3, 4, 5].map((star) => (
                   <button
                     key={star}
                     onClick={() => setFeedback({ ...feedback, rating: star })}
-                    className="transition-transform hover:scale-110"
+                    className={`p-2 rounded-lg transition ${
+                      feedback.rating >= star
+                        ? 'text-yellow-500'
+                        : 'text-gray-300 hover:text-yellow-400'
+                    }`}
                   >
-                    <Star
-                      size={40}
-                      className={star <= feedback.rating ? 'fill-yellow-400 text-yellow-400' : 'text-gray-300'}
-                    />
+                    <Star size={32} fill={feedback.rating >= star ? 'currentColor' : 'none'} />
                   </button>
                 ))}
               </div>
-            </div>
 
-            <div className="mb-6">
-              <label className="block text-gray-700 font-medium mb-2">Your Review (Optional)</label>
-              <textarea
-                value={feedback.comment}
-                onChange={(e) => setFeedback({ ...feedback, comment: e.target.value })}
-                placeholder="Tell us about this product..."
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 resize-none"
-                rows="4"
-              />
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Your Review (Optional)
+                </label>
+                <textarea
+                  value={feedback.comment}
+                  onChange={(e) => setFeedback({ ...feedback, comment: e.target.value })}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  rows="4"
+                  placeholder="Share your experience with this product..."
+                />
+              </div>
             </div>
 
             <div className="flex space-x-3">
@@ -694,63 +752,47 @@ export default function CustomerOrdersPage() {
       {showReturnModal && selectedOrder && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-8">
-            <div className="flex items-center space-x-3 mb-4">
-              <RotateCcw size={24} className="text-orange-600" />
-              <h2 className="text-2xl font-bold text-gray-900">Return Request</h2>
-            </div>
-            
-            <div className="bg-orange-50 p-4 rounded-lg mb-6">
-              <div className="flex items-start">
-                <AlertCircle size={18} className="text-orange-600 mr-2 mt-0.5 flex-shrink-0" />
-                <div>
-                  <p className="text-sm text-orange-800">
-                    <strong>Return Policy:</strong> You can return this order within 14 days of delivery.
-                    Refunds will be processed within 5-7 business days after pickup.
-                  </p>
-                  <p className="text-sm text-orange-700 mt-2">
-                    <strong>Order #{selectedOrder.orderNumber}</strong> • Delivered on {formatDate(selectedOrder.deliveredAt)}
-                  </p>
-                </div>
-              </div>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-2xl font-bold text-gray-900">Request Return</h2>
+              <button
+                onClick={() => {
+                  setShowReturnModal(false);
+                  setReturnReason('');
+                }}
+                className="p-2 hover:bg-gray-100 rounded-lg transition"
+              >
+                <X size={24} />
+              </button>
             </div>
 
             <div className="mb-6">
-              <label className="block text-gray-700 font-medium mb-2">Reason for Return *</label>
+              <p className="text-gray-600 mb-4">
+                Order #{selectedOrder.orderNumber}
+              </p>
+              
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Reason for Return *
+              </label>
               <select
                 value={returnReason}
                 onChange={(e) => setReturnReason(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
               >
                 <option value="">Select a reason</option>
-                <option value="defective">Product is defective/damaged</option>
-                <option value="wrong_item">Wrong item received</option>
-                <option value="not_as_described">Not as described</option>
-                <option value="quality_issues">Quality issues</option>
-                <option value="size_fit">Size/fit issues</option>
-                <option value="changed_mind">Changed my mind</option>
+                <option value="quality_issues">Quality Issues</option>
+                <option value="wrong_product">Wrong Product Received</option>
+                <option value="damaged">Product Damaged</option>
+                <option value="not_as_described">Not as Described</option>
+                <option value="changed_mind">Changed Mind</option>
                 <option value="other">Other</option>
               </select>
-              
-              {returnReason === 'other' && (
-                <textarea
-                  value={returnReason}
-                  onChange={(e) => setReturnReason(e.target.value)}
-                  placeholder="Please specify the reason..."
-                  className="w-full mt-2 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                  rows="2"
-                />
-              )}
-            </div>
 
-            <div className="bg-blue-50 p-4 rounded-lg mb-6">
-              <h3 className="font-semibold text-blue-800 mb-2">Return Instructions:</h3>
-              <ul className="text-sm text-blue-700 space-y-1 list-disc list-inside">
-                <li>Keep the product in original packaging with all accessories</li>
-                <li>Do not remove any labels or tags</li>
-                <li>Delivery partner will contact you for pickup</li>
-                <li>Pickup is FREE of charge</li>
-                <li>Refund will be issued to original payment method</li>
-              </ul>
+              <div className="mt-4 p-4 bg-blue-50 rounded-lg">
+                <p className="text-sm text-blue-800">
+                  <strong>Note:</strong> Return must be requested within 14 days of delivery. 
+                  Product should be in original packaging with all accessories.
+                </p>
+              </div>
             </div>
 
             <div className="flex space-x-3">
@@ -760,24 +802,22 @@ export default function CustomerOrdersPage() {
                   setReturnReason('');
                 }}
                 className="flex-1 px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition"
+                disabled={processingReturn}
               >
                 Cancel
               </button>
               <button
                 onClick={handleReturnRequest}
-                disabled={!returnReason || processingReturn}
+                disabled={!returnReason.trim() || processingReturn}
                 className="flex-1 px-6 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center"
               >
                 {processingReturn ? (
                   <>
                     <Loader2 className="animate-spin mr-2" size={18} />
-                    Submitting...
+                    Processing...
                   </>
                 ) : (
-                  <>
-                    <RotateCcw size={18} className="mr-2" />
-                    Submit Return Request
-                  </>
+                  'Submit Request'
                 )}
               </button>
             </div>
@@ -786,70 +826,65 @@ export default function CustomerOrdersPage() {
       )}
 
       {/* Return Status Modal */}
-      {showReturnStatusModal && selectedOrder && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-2xl w-full p-8 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-6">
-              <div className="flex items-center space-x-3">
-                <RotateCcw size={32} className="text-purple-600" />
-                <div>
-                  <h2 className="text-2xl font-bold text-gray-900">Return Request Status</h2>
-                  <p className="text-gray-600">Order #{selectedOrder.orderNumber}</p>
-                </div>
+      {showReturnStatusModal && selectedOrder && selectedOrder.returnRequest && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white border-b p-6 z-10">
+              <div className="flex items-center justify-between">
+                <h2 className="text-2xl font-bold text-gray-900">Return Status</h2>
+                <button
+                  onClick={() => setShowReturnStatusModal(false)}
+                  className="p-2 hover:bg-gray-100 rounded-lg transition"
+                >
+                  <X size={24} />
+                </button>
               </div>
-              <button
-                onClick={() => setShowReturnStatusModal(false)}
-                className="p-2 hover:bg-gray-100 rounded-lg"
-              >
-                <XIcon size={24} />
-              </button>
             </div>
 
-            {/* Calculate returnStatusInfo inside the modal */}
-            {(() => {
-              const returnStatusInfo = getReturnStatusText(selectedOrder.returnRequest);
-              
-              return (
-                <>
-                  {/* Return Status Card */}
-                  <div className="bg-gradient-to-r from-purple-50 to-blue-50 p-6 rounded-xl mb-6">
-                    <div className="grid md:grid-cols-3 gap-6">
-                      <div className="bg-white p-4 rounded-lg shadow-sm">
-                        <div className="flex items-center mb-2">
-                          <Calendar size={18} className="text-blue-600 mr-2" />
-                          <span className="text-sm text-gray-600">Requested</span>
+            <div className="p-6 space-y-6">
+              {(() => {
+                const returnStatusInfo = getReturnStatusText(selectedOrder.returnRequest);
+                
+                return (
+                  <>
+                    {/* Return Status Card */}
+                    <div className="bg-gradient-to-r from-purple-50 to-blue-50 p-6 rounded-xl">
+                      <div className="grid md:grid-cols-3 gap-6">
+                        <div className="bg-white p-4 rounded-lg shadow-sm">
+                          <div className="flex items-center mb-2">
+                            <Calendar size={18} className="text-blue-600 mr-2" />
+                            <span className="text-sm text-gray-600">Requested</span>
+                          </div>
+                          <p className="font-semibold text-gray-900">
+                            {formatDate(selectedOrder.returnRequest?.requestedAt)}
+                          </p>
                         </div>
-                        <p className="font-semibold text-gray-900">
-                          {formatDate(selectedOrder.returnRequest?.requestedAt)}
-                        </p>
-                      </div>
-                      
-                      <div className="bg-white p-4 rounded-lg shadow-sm">
-                        <div className="flex items-center mb-2">
-                          <ClipboardCheck size={18} className="text-green-600 mr-2" />
-                          <span className="text-sm text-gray-600">Status</span>
+                        
+                        <div className="bg-white p-4 rounded-lg shadow-sm">
+                          <div className="flex items-center mb-2">
+                            <ClipboardCheck size={18} className="text-green-600 mr-2" />
+                            <span className="text-sm text-gray-600">Status</span>
+                          </div>
+                          {returnStatusInfo && (
+                            <span className={`px-3 py-1 rounded-full text-sm font-semibold ${returnStatusInfo.bg} ${returnStatusInfo.color}`}>
+                              {returnStatusInfo.text}
+                            </span>
+                          )}
                         </div>
-                        {returnStatusInfo && (
-                          <span className={`px-3 py-1 rounded-full text-sm font-semibold ${returnStatusInfo.bg} ${returnStatusInfo.color}`}>
-                            {returnStatusInfo.text}
-                          </span>
-                        )}
-                      </div>
-                      
-                      <div className="bg-white p-4 rounded-lg shadow-sm">
-                        <div className="flex items-center mb-2">
-                          <DollarSign size={18} className="text-green-600 mr-2" />
-                          <span className="text-sm text-gray-600">Refund Amount</span>
+                        
+                        <div className="bg-white p-4 rounded-lg shadow-sm">
+                          <div className="flex items-center mb-2">
+                            <DollarSign size={18} className="text-green-600 mr-2" />
+                            <span className="text-sm text-gray-600">Refund Amount</span>
+                          </div>
+                          <p className="font-bold text-xl text-green-600">
+                            ₹{selectedOrder.totalAmount?.toFixed(2) || '0.00'}
+                          </p>
                         </div>
-                        <p className="font-bold text-xl text-green-600">
-                          ₹{selectedOrder.totalAmount?.toFixed(2) || '0.00'}
-                        </p>
                       </div>
                     </div>
-                  </div>
 
-                  {/* Return Details */}
-                  <div className="space-y-6">
+                    {/* Return Details */}
                     <div>
                       <h3 className="font-semibold text-gray-900 mb-3 flex items-center">
                         <Info size={18} className="mr-2 text-blue-600" />
@@ -862,16 +897,10 @@ export default function CustomerOrdersPage() {
                             <p className="font-medium text-gray-900">{selectedOrder.returnRequest?.reason || 'N/A'}</p>
                           </div>
                           <div>
-                            <p className="text-sm text-gray-600">Delivery Partner</p>
-                            <p className="font-medium text-gray-900">
-                              {selectedOrder.deliveryPartner?.name || 'Will be assigned'}
-                            </p>
-                          </div>
-                          <div>
                             <p className="text-sm text-gray-600">Pickup Contact</p>
                             <p className="font-medium text-gray-900">{selectedOrder.deliveryAddress?.phone || 'N/A'}</p>
                           </div>
-                          <div>
+                          <div className="md:col-span-2">
                             <p className="text-sm text-gray-600">Address</p>
                             <p className="font-medium text-gray-900">{selectedOrder.deliveryAddress?.street || 'N/A'}</p>
                           </div>
@@ -945,38 +974,39 @@ export default function CustomerOrdersPage() {
                         </ul>
                       </div>
                     </div>
-                  </div>
+                  </>
+                );
+              })()}
+            </div>
 
-                  {/* Action Buttons */}
-                  <div className="flex flex-wrap gap-3 mt-6 pt-6 border-t">
-                    <button
-                      onClick={() => downloadReturnInstructions(selectedOrder)}
-                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition flex items-center"
-                    >
-                      <Download size={18} className="mr-2" />
-                      Download Instructions
-                    </button>
-                    
-                    {selectedOrder.returnRequest?.status === 'pending' && (
-                      <button
-                        onClick={() => handleCancelReturn(selectedOrder._id)}
-                        className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition flex items-center"
-                      >
-                        <XIcon size={18} className="mr-2" />
-                        Cancel Return Request
-                      </button>
-                    )}
-                    
-                    <button
-                      onClick={() => setShowReturnStatusModal(false)}
-                      className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition ml-auto"
-                    >
-                      Close
-                    </button>
-                  </div>
-                </>
-              );
-            })()}
+            <div className="sticky bottom-0 bg-white border-t p-6">
+              <div className="flex flex-wrap gap-3">
+                <button
+                  onClick={() => downloadReturnInstructions(selectedOrder)}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition flex items-center"
+                >
+                  <Download size={18} className="mr-2" />
+                  Download Instructions
+                </button>
+                
+                {selectedOrder.returnRequest?.status === 'pending' && (
+                  <button
+                    onClick={() => handleCancelReturn(selectedOrder._id)}
+                    className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition flex items-center"
+                  >
+                    <XIcon size={18} className="mr-2" />
+                    Cancel Return
+                  </button>
+                )}
+                
+                <button
+                  onClick={() => setShowReturnStatusModal(false)}
+                  className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition ml-auto"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

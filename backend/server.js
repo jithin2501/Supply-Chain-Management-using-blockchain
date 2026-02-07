@@ -235,6 +235,56 @@ const manufacturedProductSchema = new mongoose.Schema({
 
 const ManufacturedProduct = mongoose.model('ManufacturedProduct', manufacturedProductSchema);
 
+// NEW: Refund Schema
+const refundSchema = new mongoose.Schema({
+  orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order', required: true },
+  orderNumber: { type: String, required: true },
+  customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  customerName: { type: String, required: true },
+  customerEmail: { type: String, required: true },
+  manufacturerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  manufacturerName: { type: String, required: true },
+  manufacturerEmail: { type: String, required: true },
+  deliveryPartnerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  deliveryPartnerName: { type: String },
+  items: [{
+    productId: { type: mongoose.Schema.Types.ObjectId, ref: 'ManufacturedProduct', required: true },
+    productName: { type: String, required: true },
+    quantity: { type: Number, required: true },
+    price: { type: Number, required: true },
+    subtotal: { type: Number, required: true }
+  }],
+  totalAmount: { type: Number, required: true },
+  reason: { type: String, required: true },
+  refundMethod: { 
+    type: String, 
+    enum: ['wallet', 'bank_transfer', 'credit_card'], 
+    default: 'wallet' 
+  },
+  status: {
+    type: String,
+    enum: ['pending', 'processing', 'approved', 'rejected', 'completed', 'failed'],
+    default: 'pending'
+  },
+  walletAddress: { type: String },
+  transactionHash: { type: String },
+  trackingHistory: [{
+    status: { type: String, required: true },
+    message: { type: String, required: true },
+    timestamp: { type: Date, default: Date.now },
+    updatedBy: {
+      userId: mongoose.Schema.Types.ObjectId,
+      name: String,
+      role: String
+    }
+  }],
+  notes: { type: String },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
+
+const Refund = mongoose.model('Refund', refundSchema);
+
 const orderSchema = new mongoose.Schema({
   orderNumber: { type: String, required: true, unique: true },
   customer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
@@ -246,7 +296,7 @@ const orderSchema = new mongoose.Schema({
   totalAmount: { type: Number, required: true },
   status: {
     type: String,
-    enum: ['pending', 'confirmed', 'processing', 'out_for_delivery', 'near_location', 'delivered', 'cancelled', 'returned', 'return_requested'],
+    enum: ['pending', 'confirmed', 'processing', 'out_for_delivery', 'near_location', 'delivered', 'cancelled', 'returned', 'return_requested', 'out_for_pickup', 'pickup_near_location', 'pickup_otp_generated', 'pickup_completed', 'refund_requested'],
     default: 'pending'
   },
   deliveryAddress: {
@@ -258,9 +308,11 @@ const orderSchema = new mongoose.Schema({
     pincode: { type: String, required: true }
   },
   deliveryOTP: { type: String, default: null },
+  pickupOTP: { type: String, default: null },
   deliveryPartner: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   assignedAt: { type: Date, default: null },
   deliveredAt: { type: Date, default: null },
+  pickupCompletedAt: { type: Date, default: null },
   trackingHistory: [{
     status: { type: String, required: true },
     message: { type: String, required: true },
@@ -283,7 +335,7 @@ const orderSchema = new mongoose.Schema({
     requestedAt: { type: Date },
     status: { 
       type: String, 
-      enum: ['pending', 'approved', 'rejected', 'pickup_scheduled', 'picked_up', 'in_transit', 'received_at_warehouse', 'refund_initiated', 'refund_completed'],
+      enum: ['pending', 'approved', 'rejected', 'out_for_pickup', 'pickup_near_location', 'pickup_otp_generated', 'pickup_completed', 'refund_requested', 'refund_approved', 'refund_processing', 'refund_completed'],
       default: 'pending' 
     },
     requestedBy: { type: String, enum: ['customer', 'delivery_partner'] },
@@ -298,6 +350,10 @@ const orderSchema = new mongoose.Schema({
       time: { type: String },
       notes: { type: String }
     },
+    pickupOTP: { type: String },
+    pickupOTPGeneratedAt: { type: Date },
+    pickupVerifiedAt: { type: Date },
+    refundId: { type: mongoose.Schema.Types.ObjectId, ref: 'Refund' },
     lastUpdated: { type: Date },
     notes: { type: String }
   },
@@ -902,7 +958,7 @@ apiRouter.get('/products/:productId/detail', authenticateToken, async (req, res)
   }
 });
 
-/* ===================== MANUFACTURER REVENUE ROUTES ===================== */
+/* ===================== MANUFACTURER REVENUE & REFUNDS ROUTES ===================== */
 
 apiRouter.get('/manufacturer/revenue', authenticateToken, async (req, res) => {
   try {
@@ -930,8 +986,7 @@ apiRouter.get('/manufacturer/revenue', authenticateToken, async (req, res) => {
     const productIds = manufacturerProducts.map(p => p._id);
     console.log(`🔍 [DEBUG] Looking for product IDs:`, productIds);
 
-    // Build query for manufacturer's orders - FIXED
-    // We need to find orders where at least one item has a product in productIds
+    // Build query for manufacturer's orders
     const query = {
       'items.product': { 
         $in: productIds 
@@ -1000,18 +1055,6 @@ apiRouter.get('/manufacturer/revenue', authenticateToken, async (req, res) => {
 
     console.log(`📦 [DEBUG] Found ${orders.length} orders for manufacturer ${req.user.userId}`);
     
-    // Debug each order
-    orders.forEach((order, index) => {
-      console.log(`📦 Order ${index + 1}: ${order.orderNumber}`);
-      console.log('   Items:', order.items.map(item => ({
-        productId: item.product?._id?.toString(),
-        productName: item.product?.name,
-        manufacturerId: item.product?.manufacturerId,
-        quantity: item.quantity,
-        price: item.price
-      })));
-    });
-
     // Transform orders to revenue receipts
     const receipts = orders.map(order => {
       // Filter items to only include manufacturer's products
@@ -1053,8 +1096,10 @@ apiRouter.get('/manufacturer/revenue', authenticateToken, async (req, res) => {
         })),
         totalAmount: manufacturerTotal,
         status: order.status,
+        returnRequest: order.returnRequest,
         paymentDetails: order.paymentDetails || {},
         createdAt: order.createdAt,
+        deliveredAt: order.deliveredAt,
         deliveryAddress: order.deliveryAddress,
         trackingHistory: order.trackingHistory || []
       };
@@ -1072,7 +1117,9 @@ apiRouter.get('/manufacturer/revenue', authenticateToken, async (req, res) => {
       monthlyRevenue: 0,
       pendingAmount: receipts
         .filter(r => r.status === 'pending' || r.status === 'confirmed')
-        .reduce((sum, receipt) => sum + receipt.totalAmount, 0)
+        .reduce((sum, receipt) => sum + receipt.totalAmount, 0),
+      totalRefunds: 0,
+      pendingRefunds: 0
     };
 
     // Calculate monthly revenue
@@ -1087,6 +1134,11 @@ apiRouter.get('/manufacturer/revenue', authenticateToken, async (req, res) => {
     stats.monthlyRevenue = monthlyReceipts.reduce((sum, receipt) => 
       sum + receipt.totalAmount, 0
     );
+
+    // Calculate refund stats
+    const refunds = await Refund.find({ manufacturerId: req.user.userId });
+    stats.totalRefunds = refunds.length;
+    stats.pendingRefunds = refunds.filter(r => r.status === 'pending' || r.status === 'processing').length;
 
     console.log(`💰 Final: Revenue data fetched for manufacturer ${req.user.userId}: ${receipts.length} receipts`);
 
@@ -1103,6 +1155,239 @@ apiRouter.get('/manufacturer/revenue', authenticateToken, async (req, res) => {
 
   } catch (err) {
     console.error('❌ Error fetching revenue data:', err);
+    res.status(500).json({ 
+      message: 'Server error',
+      error: err.message 
+    });
+  }
+});
+
+// Manufacturer refunds management
+apiRouter.get('/manufacturer/refunds', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'manufacturers') {
+      return res.status(403).json({ message: 'Access denied. Manufacturers only.' });
+    }
+
+    const { status } = req.query;
+    
+    const query = { manufacturerId: req.user.userId };
+    if (status && status !== 'all') {
+      query.status = status;
+    }
+
+    const refunds = await Refund.find(query)
+      .populate('customerId', 'name email walletAddress')
+      .populate('deliveryPartnerId', 'name email')
+      .populate('orderId', 'orderNumber')
+      .sort({ createdAt: -1 });
+
+    // Calculate summary
+    const totalRefundAmount = refunds.reduce((sum, refund) => sum + refund.totalAmount, 0);
+    const pendingRefunds = refunds.filter(r => r.status === 'pending' || r.status === 'processing').length;
+    const completedRefunds = refunds.filter(r => r.status === 'completed').length;
+
+    res.json({
+      refunds,
+      summary: {
+        total: refunds.length,
+        pending: pendingRefunds,
+        completed: completedRefunds,
+        totalAmount: totalRefundAmount
+      }
+    });
+
+  } catch (err) {
+    console.error('❌ Error fetching refunds:', err);
+    res.status(500).json({ 
+      message: 'Server error',
+      error: err.message 
+    });
+  }
+});
+
+apiRouter.get('/manufacturer/refunds/:refundId', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'manufacturers') {
+      return res.status(403).json({ message: 'Access denied. Manufacturers only.' });
+    }
+
+    const { refundId } = req.params;
+
+    const refund = await Refund.findOne({
+      _id: refundId,
+      manufacturerId: req.user.userId
+    })
+      .populate('customerId', 'name email walletAddress')
+      .populate('deliveryPartnerId', 'name email')
+      .populate('orderId')
+      .populate('items.productId');
+
+    if (!refund) {
+      return res.status(404).json({ message: 'Refund not found' });
+    }
+
+    res.json(refund);
+
+  } catch (err) {
+    console.error('❌ Error fetching refund details:', err);
+    res.status(500).json({ 
+      message: 'Server error',
+      error: err.message 
+    });
+  }
+});
+
+apiRouter.put('/manufacturer/refunds/:refundId/process', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'manufacturers') {
+      return res.status(403).json({ message: 'Access denied. Manufacturers only.' });
+    }
+
+    const { refundId } = req.params;
+    const { action, transactionHash, notes } = req.body;
+
+    if (!action || !['approve', 'reject', 'complete'].includes(action)) {
+      return res.status(400).json({ message: 'Invalid action' });
+    }
+
+    const refund = await Refund.findOne({
+      _id: refundId,
+      manufacturerId: req.user.userId
+    });
+
+    if (!refund) {
+      return res.status(404).json({ message: 'Refund not found' });
+    }
+
+    // Check if refund can be processed
+    if (refund.status === 'completed' || refund.status === 'failed') {
+      return res.status(400).json({ message: `Refund is already ${refund.status}` });
+    }
+
+    const manufacturer = await User.findById(req.user.userId);
+    const order = await Order.findById(refund.orderId);
+
+    if (action === 'approve') {
+      refund.status = 'processing';
+      refund.notes = notes || refund.notes;
+      
+      refund.trackingHistory.push({
+        status: 'processing',
+        message: 'Refund approved and ready for processing',
+        timestamp: new Date(),
+        updatedBy: {
+          userId: req.user.userId,
+          name: manufacturer.name,
+          role: 'manufacturer'
+        }
+      });
+
+      // Update order return status
+      if (order) {
+        order.returnRequest.status = 'refund_approved';
+        order.returnRequest.lastUpdated = new Date();
+        
+        order.trackingHistory.push({
+          status: 'refund_approved',
+          message: 'Refund approved by manufacturer',
+          timestamp: new Date(),
+          deliveryPartner: {
+            name: manufacturer.name,
+            phone: manufacturer.email
+          }
+        });
+        
+        await order.save();
+      }
+
+    } else if (action === 'complete') {
+      if (!transactionHash) {
+        return res.status(400).json({ message: 'Transaction hash is required to complete refund' });
+      }
+
+      refund.status = 'completed';
+      refund.transactionHash = transactionHash;
+      refund.notes = notes || refund.notes;
+      refund.updatedAt = new Date();
+      
+      refund.trackingHistory.push({
+        status: 'completed',
+        message: `Refund completed. Transaction: ${transactionHash}`,
+        timestamp: new Date(),
+        updatedBy: {
+          userId: req.user.userId,
+          name: manufacturer.name,
+          role: 'manufacturer'
+        }
+      });
+
+      // Update order return status
+      if (order) {
+        order.returnRequest.status = 'refund_completed';
+        order.returnRequest.lastUpdated = new Date();
+        order.status = 'returned';
+        
+        order.trackingHistory.push({
+          status: 'refund_completed',
+          message: `Refund completed successfully. Transaction: ${transactionHash}`,
+          timestamp: new Date()
+        });
+        
+        // Return product quantity to inventory
+        for (const item of refund.items) {
+          await ManufacturedProduct.findByIdAndUpdate(
+            item.productId,
+            { $inc: { quantity: item.quantity } }
+          );
+        }
+        
+        await order.save();
+      }
+
+    } else if (action === 'reject') {
+      refund.status = 'rejected';
+      refund.notes = notes || refund.notes;
+      refund.updatedAt = new Date();
+      
+      refund.trackingHistory.push({
+        status: 'rejected',
+        message: 'Refund rejected by manufacturer',
+        timestamp: new Date(),
+        updatedBy: {
+          userId: req.user.userId,
+          name: manufacturer.name,
+          role: 'manufacturer'
+        }
+      });
+
+      // Update order return status
+      if (order) {
+        order.returnRequest.status = 'rejected';
+        order.returnRequest.lastUpdated = new Date();
+        order.status = 'delivered'; // Revert to delivered
+        
+        order.trackingHistory.push({
+          status: 'refund_rejected',
+          message: 'Refund rejected by manufacturer',
+          timestamp: new Date()
+        });
+        
+        await order.save();
+      }
+    }
+
+    await refund.save();
+
+    console.log(`✅ Refund ${refundId} ${action}ed by manufacturer ${manufacturer.email}`);
+
+    res.json({
+      message: `Refund ${action}d successfully`,
+      refund
+    });
+
+  } catch (err) {
+    console.error('❌ Error processing refund:', err);
     res.status(500).json({ 
       message: 'Server error',
       error: err.message 
@@ -1770,6 +2055,8 @@ apiRouter.post('/orders/:orderId/return', authenticateToken, async (req, res) =>
       });
     }
 
+    const customer = await User.findById(req.user.userId);
+
     // Update order return request
     order.returnRequest = {
       requested: true,
@@ -1778,7 +2065,7 @@ apiRouter.post('/orders/:orderId/return', authenticateToken, async (req, res) =>
       status: 'pending',
       requestedBy: 'customer',
       customerId: req.user.userId,
-      customerName: req.user.name || req.user.email
+      customerName: customer.name || customer.email
     };
 
     // Update order status
@@ -1980,7 +2267,12 @@ apiRouter.get('/delivery/stats', authenticateToken, async (req, res) => {
       status: 'return_requested'
     });
 
-    res.json({ totalDeliveries, completedToday, pending, returns });
+    const returnPickups = await Order.countDocuments({
+      'returnRequest.deliveryPartnerId': req.user.userId,
+      'returnRequest.status': { $in: ['out_for_pickup', 'pickup_near_location', 'pickup_otp_generated'] }
+    });
+
+    res.json({ totalDeliveries, completedToday, pending, returns, returnPickups });
   } catch (error) {
     console.error('❌ Error fetching stats:', error);
     res.status(500).json({ message: 'Failed to fetch stats' });
@@ -2063,7 +2355,7 @@ apiRouter.put('/delivery/orders/:orderId/status', authenticateToken, async (req,
       return res.status(404).json({ message: 'Order not found or not assigned to you' });
     }
 
-    // Updated valid transitions
+    // Updated valid transitions for delivery
     const validTransitions = {
       'confirmed': ['out_for_delivery'],
       'out_for_delivery': ['near_location'],
@@ -2205,6 +2497,9 @@ apiRouter.post('/delivery/orders/:orderId/process-return', authenticateToken, as
         };
       }
 
+      // Update order status for pickup flow
+      order.status = 'return_requested';
+
       order.trackingHistory.push({
         status: 'return_approved',
         message: `Return approved by delivery partner ${deliveryPartner.name}. Pickup scheduled${pickupDate ? ` for ${pickupDate}` : ''}.`,
@@ -2259,7 +2554,7 @@ apiRouter.post('/delivery/orders/:orderId/process-return', authenticateToken, as
   }
 });
 
-// Delivery partner updates return status (picked up, in transit, received, etc.)
+// Delivery partner updates return pickup status (just like delivery flow)
 apiRouter.put('/delivery/orders/:orderId/return-status', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'delivery_partner') {
@@ -2269,7 +2564,7 @@ apiRouter.put('/delivery/orders/:orderId/return-status', authenticateToken, asyn
     const { orderId } = req.params;
     const { status, notes } = req.body;
 
-    const validStatuses = ['pickup_scheduled', 'picked_up', 'in_transit', 'received_at_warehouse', 'refund_initiated', 'refund_completed'];
+    const validStatuses = ['out_for_pickup', 'pickup_near_location', 'pickup_otp_generated', 'pickup_completed', 'refund_requested'];
     
     if (!status || !validStatuses.includes(status)) {
       return res.status(400).json({ 
@@ -2290,9 +2585,21 @@ apiRouter.put('/delivery/orders/:orderId/return-status', authenticateToken, asyn
       return res.status(400).json({ message: 'No return request found for this order' });
     }
 
-    if (order.returnRequest.status !== 'approved' && !['pickup_scheduled', 'picked_up'].includes(order.returnRequest.status)) {
+    // FIXED: Implement proper state transition system
+    const allowedTransitions = {
+      'approved': ['out_for_pickup', 'pickup_near_location', 'pickup_otp_generated', 'pickup_completed'],
+      'out_for_pickup': ['pickup_near_location', 'pickup_otp_generated', 'pickup_completed'],
+      'pickup_near_location': ['pickup_otp_generated', 'pickup_completed'],
+      'pickup_otp_generated': ['pickup_completed'],
+      'pickup_completed': ['refund_requested']  // This is the key fix - allows transition to refund_requested
+    };
+
+    const currentStatus = order.returnRequest.status;
+    
+    if (!allowedTransitions[currentStatus] || !allowedTransitions[currentStatus].includes(status)) {
       return res.status(400).json({ 
-        message: 'Return must be approved before updating status' 
+        message: `Cannot transition from ${currentStatus} to ${status}. Current status: ${currentStatus}`,
+        allowedTransitions: allowedTransitions[currentStatus] || []
       });
     }
 
@@ -2303,19 +2610,21 @@ apiRouter.put('/delivery/orders/:orderId/return-status', authenticateToken, asyn
     order.returnRequest.lastUpdated = new Date();
     order.returnRequest.notes = notes || order.returnRequest.notes;
 
+    // Update order status to match return flow
+    order.status = status;
+
     // Add to tracking history
     const statusMessages = {
-      'pickup_scheduled': 'Pickup scheduled for return',
-      'picked_up': 'Return item picked up from customer',
-      'in_transit': 'Return item in transit to warehouse',
-      'received_at_warehouse': 'Return item received at warehouse',
-      'refund_initiated': 'Refund initiated for customer',
-      'refund_completed': 'Refund completed successfully'
+      'out_for_pickup': 'Out for return pickup',
+      'pickup_near_location': 'Near customer location for pickup',
+      'pickup_otp_generated': 'Pickup OTP generated for verification',
+      'pickup_completed': 'Return item picked up successfully',
+      'refund_requested': 'Refund requested from manufacturer'
     };
 
     order.trackingHistory.push({
-      status: `return_${status}`,
-      message: `${statusMessages[status] || status.replace('_', ' ')}${notes ? ` - ${notes}` : ''}`,
+      status: status,
+      message: `${statusMessages[status] || status.replace(/_/g, ' ')}${notes ? ` - ${notes}` : ''}`,
       timestamp: new Date(),
       deliveryPartner: {
         name: deliveryPartner.name,
@@ -2323,14 +2632,120 @@ apiRouter.put('/delivery/orders/:orderId/return-status', authenticateToken, asyn
       }
     });
 
-    // If refund completed, update order status
-    if (status === 'refund_completed') {
-      order.status = 'returned';
-      order.trackingHistory.push({
-        status: 'returned',
-        message: 'Order returned and refund completed',
-        timestamp: new Date()
-      });
+    // Handle special cases
+    if (status === 'pickup_otp_generated') {
+      // Generate pickup OTP
+      order.returnRequest.pickupOTP = Math.floor(100000 + Math.random() * 900000).toString();
+      order.returnRequest.pickupOTPGeneratedAt = new Date();
+      order.pickupOTP = order.returnRequest.pickupOTP;
+    }
+
+    if (status === 'pickup_completed') {
+      order.returnRequest.pickupCompletedAt = new Date();
+      
+      // Create refund record for manufacturer
+      const customer = await User.findById(order.customer);
+      const manufacturerProducts = [];
+      
+      // Get manufacturer for each product
+      for (const item of order.items) {
+        const product = await ManufacturedProduct.findById(item.product).populate('manufacturerId');
+        if (product && product.manufacturerId) {
+          manufacturerProducts.push({
+            product,
+            item
+          });
+        }
+      }
+
+      // Group by manufacturer and create refunds
+      const manufacturerMap = new Map();
+      
+      for (const { product, item } of manufacturerProducts) {
+        const manufacturerId = product.manufacturerId._id.toString();
+        
+        if (!manufacturerMap.has(manufacturerId)) {
+          manufacturerMap.set(manufacturerId, {
+            manufacturerId: product.manufacturerId._id,
+            manufacturerName: product.manufacturerId.name,
+            manufacturerEmail: product.manufacturerId.email,
+            items: []
+          });
+        }
+        
+        manufacturerMap.get(manufacturerId).items.push({
+          productId: product._id,
+          productName: product.name,
+          quantity: item.quantity,
+          price: item.price,
+          subtotal: item.price * item.quantity
+        });
+      }
+
+      // Create refund for each manufacturer
+      for (const [manufacturerId, data] of manufacturerMap) {
+        const totalAmount = data.items.reduce((sum, item) => sum + item.subtotal, 0);
+        
+        const refund = new Refund({
+          orderId: order._id,
+          orderNumber: order.orderNumber,
+          customerId: order.customer,
+          customerName: customer.name,
+          customerEmail: customer.email,
+          manufacturerId: data.manufacturerId,
+          manufacturerName: data.manufacturerName,
+          manufacturerEmail: data.manufacturerEmail,
+          deliveryPartnerId: req.user.userId,
+          deliveryPartnerName: deliveryPartner.name,
+          items: data.items,
+          totalAmount,
+          reason: order.returnRequest.reason,
+          status: 'pending',
+          walletAddress: customer.walletAddress || order.paymentDetails?.walletAddress,
+          trackingHistory: [{
+            status: 'pending',
+            message: 'Refund created after successful pickup',
+            timestamp: new Date(),
+            updatedBy: {
+              userId: req.user.userId,
+              name: deliveryPartner.name,
+              role: 'delivery_partner'
+            }
+          }]
+        });
+
+        await refund.save();
+
+        // Link refund to order
+        order.returnRequest.refundId = refund._id;
+        
+        console.log(`✅ Refund created for manufacturer ${data.manufacturerName}: ₹${totalAmount}`);
+      }
+
+    }
+
+    if (status === 'refund_requested') {
+      // Update refund status if exists
+      if (order.returnRequest.refundId) {
+        await Refund.findByIdAndUpdate(
+          order.returnRequest.refundId,
+          {
+            status: 'processing',
+            $push: {
+              trackingHistory: {
+                status: 'processing',
+                message: 'Refund requested to manufacturer',
+                timestamp: new Date(),
+                updatedBy: {
+                  userId: req.user.userId,
+                  name: deliveryPartner.name,
+                  role: 'delivery_partner'
+                }
+              }
+            }
+          }
+        );
+      }
     }
 
     await order.save();
@@ -2340,7 +2755,8 @@ apiRouter.put('/delivery/orders/:orderId/return-status', authenticateToken, asyn
     res.json({ 
       message: 'Return status updated successfully',
       order,
-      returnRequest: order.returnRequest
+      returnRequest: order.returnRequest,
+      pickupOTP: status === 'pickup_otp_generated' ? order.returnRequest.pickupOTP : undefined
     });
   } catch (error) {
     console.error('❌ Error updating return status:', error);
@@ -2348,6 +2764,126 @@ apiRouter.put('/delivery/orders/:orderId/return-status', authenticateToken, asyn
       message: 'Failed to update return status',
       error: error.message 
     });
+  }
+});
+
+// Generate OTP for return pickup
+apiRouter.post('/delivery/orders/:orderId/generate-pickup-otp', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'delivery_partner') {
+      return res.status(403).json({ message: 'Access denied. Delivery partners only.' });
+    }
+
+    const { orderId } = req.params;
+
+    const order = await Order.findOne({ 
+      _id: orderId,
+      deliveryPartner: req.user.userId 
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found or not assigned to you' });
+    }
+
+    if (order.returnRequest.status !== 'pickup_near_location') {
+      return res.status(400).json({ 
+        message: 'OTP can only be generated when near pickup location' 
+      });
+    }
+
+    // Generate OTP
+    const pickupOTP = Math.floor(100000 + Math.random() * 900000).toString();
+    order.returnRequest.pickupOTP = pickupOTP;
+    order.returnRequest.pickupOTPGeneratedAt = new Date();
+    order.pickupOTP = pickupOTP;
+
+    // Update status
+    order.returnRequest.status = 'pickup_otp_generated';
+    order.status = 'pickup_otp_generated';
+
+    order.trackingHistory.push({
+      status: 'pickup_otp_generated',
+      message: `Pickup OTP generated: ${pickupOTP}`,
+      timestamp: new Date(),
+      deliveryPartner: {
+        name: req.user.name,
+        phone: req.user.email
+      }
+    });
+
+    await order.save();
+
+    console.log(`✅ Pickup OTP generated for order ${order.orderNumber}: ${pickupOTP}`);
+
+res.json({ 
+  message: 'Pickup OTP generated and sent to customer',
+  order 
+  // DON'T include pickupOTP here
+});
+  } catch (error) {
+    console.error('❌ Error generating pickup OTP:', error);
+    res.status(500).json({ message: 'Failed to generate pickup OTP' });
+  }
+});
+
+// Verify pickup OTP
+apiRouter.post('/delivery/orders/:orderId/verify-pickup-otp', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'delivery_partner') {
+      return res.status(403).json({ message: 'Access denied. Delivery partners only.' });
+    }
+
+    const { orderId } = req.params;
+    const { otp } = req.body;
+
+    if (!otp || otp.length !== 6) {
+      return res.status(400).json({ message: 'Valid 6-digit OTP is required' });
+    }
+
+    const order = await Order.findOne({ 
+      _id: orderId, 
+      deliveryPartner: req.user.userId 
+    });
+
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found or not assigned to you' });
+    }
+
+    if (!order.returnRequest.pickupOTP) {
+      return res.status(400).json({ message: 'Pickup OTP not generated yet. Please generate OTP first.' });
+    }
+
+    if (order.returnRequest.pickupOTP !== otp) {
+      return res.status(400).json({ message: 'Invalid OTP' });
+    }
+
+    // Update order status to pickup completed
+    order.returnRequest.status = 'pickup_completed';
+    order.returnRequest.pickupVerifiedAt = new Date();
+    order.status = 'pickup_completed';
+    order.pickupCompletedAt = new Date();
+    
+    order.trackingHistory.push({
+      status: 'pickup_completed',
+      message: 'Pickup verified successfully with OTP',
+      timestamp: new Date(),
+      deliveryPartner: {
+        name: req.user.name,
+        phone: req.user.email
+      }
+    });
+
+    await order.save();
+
+    console.log(`✅ Pickup verified for order ${order.orderNumber} with OTP`);
+
+    res.json({ 
+      message: 'Pickup verified successfully with OTP', 
+      order 
+    });
+  } catch (error) {
+    console.error('❌ Error verifying pickup OTP:', error);
+    res.status(500).json({ message: 'Failed to verify pickup OTP', error: error.message });
   }
 });
 
@@ -2398,7 +2934,7 @@ apiRouter.get('/delivery/orders/:orderId/return-details', authenticateToken, asy
         daysSinceDelivery: daysSinceDelivery
       },
       returnRequest: order.returnRequest,
-      trackingHistory: order.trackingHistory.filter(t => t.status.includes('return'))
+      trackingHistory: order.trackingHistory.filter(t => t.status.includes('return') || t.status.includes('pickup'))
     });
   } catch (error) {
     console.error('❌ Error fetching return details:', error);
@@ -3034,6 +3570,7 @@ apiRouter.post('/manufacturer/manufacture-combined', authenticateToken, upload.s
     });
   }
 });
+
 /* ===================== WALLET ROUTES ===================== */
 
 apiRouter.put('/users/wallet', authenticateToken, async (req, res) => {

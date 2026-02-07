@@ -6,7 +6,8 @@ import {
   ChevronRight, ArrowLeft, MoreVertical, Edit, Download,
   Eye, EyeOff, Shield, RotateCcw, FileText, Check, X,
   ThumbsUp, ThumbsDown, Calendar, DollarSign, Loader2,
-  ShieldCheck, Mail, MessageSquare, PhoneCall, ExternalLink
+  ShieldCheck, Mail, MessageSquare, PhoneCall, ExternalLink,
+  DollarSign as DollarSignIcon, Key as KeyIcon, Lock as LockIcon
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -23,18 +24,24 @@ export default function DeliveryPartnerDashboard() {
     totalDeliveries: 0,
     completedToday: 0,
     pending: 0,
-    returns: 0
+    returns: 0,
+    returnPickups: 0
   });
   const [showOTPConfirmModal, setShowOTPConfirmModal] = useState(false);
   const [showGenerateOTPModal, setShowGenerateOTPModal] = useState(false);
   const [showVerifyOTPModal, setShowVerifyOTPModal] = useState(false);
+  const [showPickupOTPModal, setShowPickupOTPModal] = useState(false);
+  const [showVerifyPickupOTPModal, setShowVerifyPickupOTPModal] = useState(false);
   const [showReturnModal, setShowReturnModal] = useState(false);
   const [showReturnDetailsModal, setShowReturnDetailsModal] = useState(false);
   const [showReturnActionModal, setShowReturnActionModal] = useState(false);
+  const [showRefundRequestModal, setShowRefundRequestModal] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [selectedReturnRequest, setSelectedReturnRequest] = useState(null);
   const [otpInput, setOtpInput] = useState(['', '', '', '', '', '']);
+  const [pickupOTPInput, setPickupOTPInput] = useState(['', '', '', '', '', '']);
   const [otpSentTo, setOtpSentTo] = useState('');
+  const [pickupOTPSentTo, setPickupOTPSentTo] = useState('');
   const [viewMode, setViewMode] = useState('list');
   const [returnAction, setReturnAction] = useState('approve');
   const [returnPickupDate, setReturnPickupDate] = useState('');
@@ -255,16 +262,19 @@ export default function DeliveryPartnerDashboard() {
     }
   };
 
-  const updateOrderStatus = async (orderId, newStatus) => {
-    try {
-      const currentToken = getToken();
-      if (!currentToken) {
-        alert('Session expired. Please login again.');
-        handleLogout();
-        return;
-      }
+const updateOrderStatus = async (orderId, newStatus) => {
+  try {
+    const currentToken = getToken();
+    if (!currentToken) {
+      alert('Session expired. Please login again.');
+      handleLogout();
+      return;
+    }
 
-      const response = await fetch(`${API_URL}/delivery/orders/${orderId}/status`, {
+    // Special handling for return pickup status updates
+    if (['out_for_pickup', 'pickup_near_location', 'pickup_completed', 'refund_requested'].includes(newStatus)) {
+      // For return pickup flows, use the return-status endpoint instead
+      const response = await fetch(`${API_URL}/delivery/orders/${orderId}/return-status`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${currentToken}`,
@@ -282,26 +292,68 @@ export default function DeliveryPartnerDashboard() {
           handleLogout();
           return;
         }
-        throw new Error(data.message || 'Failed to update status');
+        throw new Error(data.message || 'Failed to update return status');
       }
 
-      alert(`Order status updated to: ${newStatus.replace('_', ' ')}`);
+      alert(`Return status updated to: ${newStatus.replace(/_/g, ' ')}`);
       
       fetchAssignments();
+      fetchReturnRequests();
       fetchStats();
       
-      if (newStatus === 'near_location' && selectedOrder && selectedOrder._id === orderId) {
-        setSelectedOrder(prev => ({ ...prev, status: 'near_location' }));
+      if (selectedOrder && selectedOrder._id === orderId) {
+        setSelectedOrder(prev => ({ 
+          ...prev, 
+          status: newStatus,
+          returnRequest: {
+            ...prev.returnRequest,
+            status: newStatus
+          }
+        }));
       }
-    } catch (error) {
-      console.error('Update status error:', error);
-      if (error.message.includes('Invalid status transition')) {
-        alert(`Cannot update status: ${error.message}\n\nPlease check the current order status and try the appropriate action.`);
-      } else {
-        alert(`Failed to update order status: ${error.message}`);
-      }
+      return;
     }
-  };
+
+    // For regular delivery status updates, use the original endpoint
+    const response = await fetch(`${API_URL}/delivery/orders/${orderId}/status`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${currentToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ status: newStatus })
+    });
+
+    const data = await response.json();
+    
+    if (!response.ok) {
+      console.error('Error response:', data);
+      if (response.status === 403) {
+        alert('Access denied. Please login again.');
+        handleLogout();
+        return;
+      }
+      throw new Error(data.message || 'Failed to update status');
+    }
+
+    alert(`Order status updated to: ${newStatus.replace(/_/g, ' ')}`);
+    
+    fetchAssignments();
+    fetchStats();
+    
+    if (newStatus === 'near_location' && selectedOrder && selectedOrder._id === orderId) {
+      setSelectedOrder(prev => ({ ...prev, status: 'near_location' }));
+    }
+
+  } catch (error) {
+    console.error('Update status error:', error);
+    if (error.message.includes('Invalid status transition')) {
+      alert(`Cannot update status: ${error.message}\n\nPlease check the current order status and try the appropriate action.`);
+    } else {
+      alert(`Failed to update order status: ${error.message}`);
+    }
+  }
+};
 
   const generateOTPForOrder = async (orderId) => {
     try {
@@ -351,6 +403,52 @@ export default function DeliveryPartnerDashboard() {
     }
   };
 
+  const generatePickupOTPForOrder = async (orderId) => {
+    try {
+      const currentToken = getToken();
+      const response = await fetch(`${API_URL}/delivery/orders/${orderId}/generate-pickup-otp`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${currentToken}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      const data = await response.json();
+      
+      if (!response.ok) {
+        if (response.status === 403) {
+          console.error('Access denied. Token might be invalid or expired.');
+          alert('Access denied. Please login again.');
+          handleLogout();
+          return;
+        }
+        console.error('Error response:', data);
+        throw new Error(data.message || 'Failed to generate pickup OTP');
+      }
+
+      const phoneNumber = selectedOrder?.deliveryAddress?.phone;
+      setPickupOTPSentTo(phoneNumber);
+      
+      // Update status without storing OTP in frontend
+      setSelectedOrder(prev => ({ 
+        ...prev, 
+        returnRequest: {
+          ...prev.returnRequest,
+          status: 'pickup_otp_generated'
+        },
+        status: 'pickup_otp_generated'
+      }));
+      
+      // Show confirmation modal (without showing OTP)
+      setShowPickupOTPModal(true);
+      
+    } catch (error) {
+      console.error('Generate pickup OTP error:', error);
+      alert(`Failed to generate pickup OTP: ${error.message}`);
+    }
+  };
+
   const verifyCustomerOTP = async (orderId) => {
     const enteredOTP = otpInput.join('');
     
@@ -394,6 +492,101 @@ export default function DeliveryPartnerDashboard() {
       setSelectedOrder(prev => ({ ...prev, status: 'delivered', deliveryOTP: null }));
     } catch (error) {
       alert(error.message || 'Invalid OTP. Please ask customer for the correct OTP.');
+    }
+  };
+
+  const verifyPickupOTP = async (orderId) => {
+    const enteredOTP = pickupOTPInput.join('');
+    
+    if (enteredOTP.length !== 6) {
+      alert('Please enter a 6-digit OTP');
+      return;
+    }
+
+    try {
+      const currentToken = getToken();
+      const response = await fetch(`${API_URL}/delivery/orders/${orderId}/verify-pickup-otp`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${currentToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ otp: enteredOTP })
+      });
+
+      const data = await response.json();
+      
+      if (!response.ok) {
+        if (response.status === 403) {
+          console.error('Access denied. Token might be invalid or expired.');
+          alert('Access denied. Please login again.');
+          handleLogout();
+          return;
+        }
+        console.error('Error response:', data);
+        throw new Error(data.message || 'Pickup OTP verification failed');
+      }
+
+      alert('Pickup verified successfully! Item collected from customer.');
+      setShowVerifyPickupOTPModal(false);
+      setPickupOTPInput(['', '', '', '', '', '']);
+      setPickupOTPSentTo('');
+      
+      fetchAssignments();
+      fetchReturnRequests();
+      fetchStats();
+      
+      setSelectedOrder(prev => ({ 
+        ...prev, 
+        returnRequest: {
+          ...prev.returnRequest,
+          status: 'pickup_completed'
+        },
+        status: 'pickup_completed'
+      }));
+    } catch (error) {
+      alert(error.message || 'Invalid pickup OTP. Please ask customer for the correct OTP.');
+    }
+  };
+
+  const requestRefundFromManufacturer = async (orderId) => {
+    try {
+      const currentToken = getToken();
+      const response = await fetch(`${API_URL}/delivery/orders/${orderId}/return-status`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${currentToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ 
+          status: 'refund_requested',
+          notes: 'Refund requested to manufacturer after successful pickup'
+        })
+      });
+
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.message || 'Failed to request refund');
+      }
+
+      alert('Refund requested successfully to manufacturer!');
+      setShowRefundRequestModal(false);
+      
+      fetchAssignments();
+      fetchReturnRequests();
+      fetchStats();
+      
+      setSelectedOrder(prev => ({ 
+        ...prev, 
+        returnRequest: {
+          ...prev.returnRequest,
+          status: 'refund_requested'
+        },
+        status: 'refund_requested'
+      }));
+    } catch (error) {
+      alert(`Failed to request refund: ${error.message}`);
     }
   };
 
@@ -482,7 +675,7 @@ export default function DeliveryPartnerDashboard() {
         throw new Error(data.message || 'Failed to update return status');
       }
 
-      alert(`Return status updated to ${status.replace('_', ' ')}`);
+      alert(`Return status updated to ${status.replace(/_/g, ' ')}`);
       
       // Refresh data
       fetchAssignments();
@@ -514,7 +707,12 @@ export default function DeliveryPartnerDashboard() {
       delivered: 'bg-green-100 text-green-800',
       cancelled: 'bg-red-100 text-red-800',
       returned: 'bg-gray-100 text-gray-800',
-      return_requested: 'bg-red-100 text-red-800'
+      return_requested: 'bg-red-100 text-red-800',
+      out_for_pickup: 'bg-blue-100 text-blue-800',
+      pickup_near_location: 'bg-orange-100 text-orange-800',
+      pickup_otp_generated: 'bg-purple-100 text-purple-800',
+      pickup_completed: 'bg-green-100 text-green-800',
+      refund_requested: 'bg-red-100 text-red-800'
     };
     return colors[status] || 'bg-gray-100 text-gray-800';
   };
@@ -524,11 +722,13 @@ export default function DeliveryPartnerDashboard() {
       pending: 'bg-yellow-100 text-yellow-800',
       approved: 'bg-green-100 text-green-800',
       rejected: 'bg-red-100 text-red-800',
-      pickup_scheduled: 'bg-blue-100 text-blue-800',
-      picked_up: 'bg-purple-100 text-purple-800',
-      in_transit: 'bg-indigo-100 text-indigo-800',
-      received_at_warehouse: 'bg-teal-100 text-teal-800',
-      refund_initiated: 'bg-orange-100 text-orange-800',
+      out_for_pickup: 'bg-blue-100 text-blue-800',
+      pickup_near_location: 'bg-orange-100 text-orange-800',
+      pickup_otp_generated: 'bg-purple-100 text-purple-800',
+      pickup_completed: 'bg-green-100 text-green-800',
+      refund_requested: 'bg-red-100 text-red-800',
+      refund_approved: 'bg-green-100 text-green-800',
+      refund_processing: 'bg-blue-100 text-blue-800',
       refund_completed: 'bg-green-100 text-green-800'
     };
     return colors[status] || 'bg-gray-100 text-gray-800';
@@ -554,22 +754,43 @@ export default function DeliveryPartnerDashboard() {
     );
   };
 
-  const getStatusSteps = (currentStatus) => {
-    const steps = [
-      { status: 'confirmed', label: 'Confirmed', icon: CheckCircle },
-      { status: 'out_for_delivery', label: 'Out for Delivery', icon: Truck },
-      { status: 'near_location', label: 'Near Location', icon: MapPin },
-      { status: 'delivered', label: 'Delivered', icon: CheckCircle }
-    ];
-    
-    return steps.map(step => {
-      const isActive = step.status === currentStatus;
-      const isCompleted = 
-        steps.findIndex(s => s.status === currentStatus) > 
-        steps.findIndex(s => s.status === step.status);
+  const getStatusSteps = (currentStatus, isReturn = false) => {
+    if (isReturn) {
+      const steps = [
+        { status: 'return_requested', label: 'Return Requested', icon: RotateCcw },
+        { status: 'approved', label: 'Approved', icon: CheckCircle },
+        { status: 'out_for_pickup', label: 'Out for Pickup', icon: Truck },
+        { status: 'pickup_near_location', label: 'Near Location', icon: MapPin },
+        { status: 'pickup_otp_generated', label: 'OTP Generated', icon: Key },
+        { status: 'pickup_completed', label: 'Pickup Completed', icon: CheckCircle },
+        { status: 'refund_requested', label: 'Refund Requested', icon: DollarSignIcon }
+      ];
       
-      return { ...step, isActive, isCompleted };
-    });
+      return steps.map(step => {
+        const isActive = step.status === currentStatus;
+        const isCompleted = 
+          steps.findIndex(s => s.status === currentStatus) > 
+          steps.findIndex(s => s.status === step.status);
+        
+        return { ...step, isActive, isCompleted };
+      });
+    } else {
+      const steps = [
+        { status: 'confirmed', label: 'Confirmed', icon: CheckCircle },
+        { status: 'out_for_delivery', label: 'Out for Delivery', icon: Truck },
+        { status: 'near_location', label: 'Near Location', icon: MapPin },
+        { status: 'delivered', label: 'Delivered', icon: CheckCircle }
+      ];
+      
+      return steps.map(step => {
+        const isActive = step.status === currentStatus;
+        const isCompleted = 
+          steps.findIndex(s => s.status === currentStatus) > 
+          steps.findIndex(s => s.status === step.status);
+        
+        return { ...step, isActive, isCompleted };
+      });
+    }
   };
 
   const handleLogout = () => {
@@ -597,6 +818,18 @@ export default function DeliveryPartnerDashboard() {
     }
   };
 
+  const handlePickupOTPChange = (index, value) => {
+    if (value.length <= 1 && /^\d*$/.test(value)) {
+      const newOTP = [...pickupOTPInput];
+      newOTP[index] = value;
+      setPickupOTPInput(newOTP);
+
+      if (value && index < 5) {
+        document.getElementById(`pickup-otp-${index + 1}`).focus();
+      }
+    }
+  };
+
   const viewOrderDetails = (order) => {
     setSelectedOrder(order);
     setViewMode('detail');
@@ -612,6 +845,8 @@ export default function DeliveryPartnerDashboard() {
     setSelectedOrder(null);
     setOtpSentTo('');
     setOtpInput(['', '', '', '', '', '']);
+    setPickupOTPSentTo('');
+    setPickupOTPInput(['', '', '', '', '', '']);
   };
 
   const formatDate = (dateString) => {
@@ -667,7 +902,7 @@ export default function DeliveryPartnerDashboard() {
           </div>
 
           {/* Stats Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mt-8">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-6 mt-8">
             <div className="bg-white/10 backdrop-blur-sm rounded-xl p-6">
               <div className="flex items-center justify-between">
                 <div>
@@ -702,6 +937,15 @@ export default function DeliveryPartnerDashboard() {
                   <p className="text-3xl font-bold">{stats.returns || 0}</p>
                 </div>
                 <RotateCcw size={32} className="text-red-300" />
+              </div>
+            </div>
+            <div className="bg-white/10 backdrop-blur-sm rounded-xl p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-blue-100 text-sm mb-1">Pickups</p>
+                  <p className="text-3xl font-bold">{stats.returnPickups || 0}</p>
+                </div>
+                <Truck size={32} className="text-purple-300" />
               </div>
             </div>
           </div>
@@ -1001,6 +1245,10 @@ export default function DeliveryPartnerDashboard() {
             setSelectedOrder={setSelectedOrder}
             setShowGenerateOTPModal={setShowGenerateOTPModal}
             setShowVerifyOTPModal={setShowVerifyOTPModal}
+            generatePickupOTPForOrder={generatePickupOTPForOrder}
+            setShowPickupOTPModal={setShowPickupOTPModal}
+            setShowVerifyPickupOTPModal={setShowVerifyPickupOTPModal}
+            setShowRefundRequestModal={setShowRefundRequestModal}
             otpSentTo={otpSentTo}
             setShowReturnModal={setShowReturnModal}
             formatDate={formatDate}
@@ -1167,6 +1415,152 @@ export default function DeliveryPartnerDashboard() {
                 className="flex-1 px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition disabled:bg-gray-300 disabled:cursor-not-allowed"
               >
                 Verify OTP & Complete Delivery
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pickup OTP Modal - UPDATED */}
+      {showPickupOTPModal && selectedOrder && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-8">
+            <div className="flex items-center space-x-3 mb-4">
+              <Key size={32} className="text-purple-600" />
+              <h2 className="text-2xl font-bold text-gray-900">Pickup OTP Generated!</h2>
+            </div>
+            
+            <div className="bg-purple-50 p-6 rounded-lg mb-6">
+              <div className="flex items-center justify-center mb-4">
+                <ShieldCheck size={48} className="text-purple-600 mr-3" />
+                <div>
+                  <p className="font-semibold text-purple-800 text-lg">Pickup OTP sent to customer:</p>
+                  <p className="text-xl font-bold text-purple-900">{selectedOrder.deliveryAddress?.phone || 'N/A'}</p>
+                </div>
+              </div>
+              
+              <div className="bg-white p-4 rounded border border-purple-200">
+                <p className="text-sm text-purple-800 font-semibold mb-2">Important Security Note:</p>
+                <p className="text-sm text-purple-700">
+                  <strong>The OTP is only visible to the customer on their phone.</strong><br/>
+                  Ask the customer to tell you the 6-digit OTP they received.
+                </p>
+              </div>
+            </div>
+
+            <button
+              onClick={() => {
+                setShowPickupOTPModal(false);
+                setShowVerifyPickupOTPModal(true);
+              }}
+              className="w-full px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition"
+            >
+              Got it, Verify Pickup OTP
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Verify Pickup OTP Modal */}
+      {showVerifyPickupOTPModal && selectedOrder && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-8">
+            <h2 className="text-2xl font-bold text-gray-900 mb-4">Verify Pickup OTP</h2>
+            <p className="text-gray-600 mb-6">
+              Ask the customer for the pickup OTP and enter it below for <strong>Order #{selectedOrder.orderNumber}</strong>.
+            </p>
+
+            <div className="flex justify-center space-x-2 mb-6">
+              {pickupOTPInput.map((digit, index) => (
+                <input
+                  key={index}
+                  id={`pickup-otp-${index}`}
+                  type="text"
+                  inputMode="numeric"
+                  maxLength="1"
+                  value={digit}
+                  onChange={(e) => handlePickupOTPChange(index, e.target.value)}
+                  className="w-12 h-12 text-center text-2xl font-bold border-2 border-gray-300 rounded-lg focus:border-purple-600 focus:ring-2 focus:ring-purple-200"
+                  autoFocus={index === 0}
+                />
+              ))}
+            </div>
+
+            <div className="bg-purple-50 p-4 rounded-lg mb-6">
+              <div className="flex items-start space-x-3">
+                <AlertCircle size={20} className="text-purple-600 mt-0.5 flex-shrink-0" />
+                <div>
+                  <p className="text-sm text-purple-800 font-semibold">How to verify:</p>
+                  <ul className="text-sm text-purple-700 mt-1 list-disc list-inside space-y-1">
+                    <li>Customer should provide the 6-digit OTP they received</li>
+                    <li>Enter the OTP provided by customer</li>
+                    <li>System will verify if OTP matches</li>
+                    <li>Pickup will be marked as completed upon successful verification</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex space-x-3">
+              <button
+                onClick={() => {
+                  setShowVerifyPickupOTPModal(false);
+                  setPickupOTPInput(['', '', '', '', '', '']);
+                }}
+                className="flex-1 px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => verifyPickupOTP(selectedOrder._id)}
+                disabled={pickupOTPInput.some(d => !d)}
+                className="flex-1 px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition disabled:bg-gray-300 disabled:cursor-not-allowed"
+              >
+                Verify Pickup OTP
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Refund Request Modal */}
+      {showRefundRequestModal && selectedOrder && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-8">
+            <div className="flex items-center space-x-3 mb-4">
+              <DollarSign size={32} className="text-red-600" />
+              <h2 className="text-2xl font-bold text-gray-900">Request Refund from Manufacturer</h2>
+            </div>
+            
+            <div className="bg-red-50 p-6 rounded-lg mb-6">
+              <div className="flex items-start">
+                <AlertCircle size={18} className="text-red-600 mr-2 mt-0.5 flex-shrink-0" />
+                <div>
+                  <p className="text-sm text-red-800">
+                    <strong>Refund Request:</strong> You are about to request a refund from the manufacturer for Order #{selectedOrder.orderNumber}.
+                  </p>
+                  <p className="text-sm text-red-700 mt-2">
+                    Amount: <strong>₹{selectedOrder.totalAmount?.toFixed(2) || '0.00'}</strong>
+                  </p>
+                  <p className="text-sm text-red-700 mt-2">
+                    This will notify the manufacturer to process the refund to the customer.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex space-x-3">
+              <button
+                onClick={() => setShowRefundRequestModal(false)}
+                className="flex-1 px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => requestRefundFromManufacturer(selectedOrder._id)}
+                className="flex-1 px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition"
+              >
+                Request Refund
               </button>
             </div>
           </div>
@@ -1519,12 +1913,21 @@ function OrderDetailView({
   setSelectedOrder,
   setShowGenerateOTPModal,
   setShowVerifyOTPModal,
+  generatePickupOTPForOrder,
+  setShowPickupOTPModal,
+  setShowVerifyPickupOTPModal,
+  setShowRefundRequestModal,
   otpSentTo,
   setShowReturnModal,
   formatDate
 }) {
-  const steps = getStatusSteps(order.status);
+  const isReturnFlow = order.status === 'return_requested' || 
+                      order.returnRequest?.status === 'approved' ||
+                      ['out_for_pickup', 'pickup_near_location', 'pickup_otp_generated', 'pickup_completed', 'refund_requested'].includes(order.status);
+  
+  const steps = getStatusSteps(isReturnFlow ? order.returnRequest?.status || order.status : order.status, isReturnFlow);
   const hasOTPGenerated = order.deliveryOTP || order.otpGenerated;
+  const hasPickupOTPGenerated = order.returnRequest?.pickupOTP || order.pickupOTP;
   const isReturnRequested = order.status === 'return_requested';
   const returnStatus = order.returnRequest?.status;
 
@@ -1540,58 +1943,113 @@ function OrderDetailView({
     }
   };
 
-  const getAvailableActions = () => {
-    const actions = [];
-    
-    if (order.status === 'confirmed') {
+const getAvailableActions = () => {
+  const actions = [];
+  
+  // Delivery Actions
+  if (order.status === 'confirmed') {
+    actions.push({
+      label: 'Start Delivery',
+      onClick: handleStartDelivery,
+      color: 'bg-blue-600 hover:bg-blue-700',
+      icon: Truck,
+      description: 'Begin delivery process'
+    });
+  }
+  
+  if (order.status === 'out_for_delivery') {
+    actions.push({
+      label: 'Near Location',
+      onClick: handleNearLocation,
+      color: 'bg-orange-600 hover:bg-orange-700',
+      icon: MapPin,
+      description: 'Update location status'
+    });
+  }
+  
+  if (order.status === 'near_location') {
+    if (!hasOTPGenerated) {
       actions.push({
-        label: 'Start Delivery',
-        onClick: handleStartDelivery,
-        color: 'bg-blue-600 hover:bg-blue-700',
-        icon: Truck,
-        description: 'Begin delivery process'
+        label: 'Generate OTP',
+        onClick: () => setShowGenerateOTPModal(true),
+        color: 'bg-purple-600 hover:bg-purple-700',
+        icon: Key,
+        description: 'Generate OTP for customer verification'
       });
     }
     
-    if (order.status === 'out_for_delivery') {
+    if (hasOTPGenerated) {
       actions.push({
-        label: 'Near Location',
-        onClick: handleNearLocation,
-        color: 'bg-orange-600 hover:bg-orange-700',
-        icon: MapPin,
-        description: 'Update location status'
+        label: 'Verify OTP & Deliver',
+        onClick: () => setShowVerifyOTPModal(true),
+        color: 'bg-green-600 hover:bg-green-700',
+        icon: Lock,
+        description: 'Verify OTP to complete delivery'
       });
     }
-    
-    if (order.status === 'near_location') {
-      if (!hasOTPGenerated) {
-        actions.push({
-          label: 'Generate OTP',
-          onClick: () => setShowGenerateOTPModal(true),
-          color: 'bg-purple-600 hover:bg-purple-700',
-          icon: Key,
-          description: 'Generate OTP for customer verification'
-        });
-      }
-      
-      if (hasOTPGenerated) {
-        actions.push({
-          label: 'Verify OTP & Deliver',
-          onClick: () => setShowVerifyOTPModal(true),
-          color: 'bg-green-600 hover:bg-green-700',
-          icon: Lock,
-          description: 'Verify OTP to complete delivery'
-        });
-      }
-    }
+  }
 
-    return actions;
-  };
+  // Return Pickup Actions - FIXED
+  // Check if return request is approved (not order status)
+  if (order.returnRequest?.status === 'approved' && order.returnRequest?.requested === true) {
+    actions.push({
+      label: 'Out for Pickup',
+      onClick: () => updateOrderStatus(order._id, 'out_for_pickup'),
+      color: 'bg-blue-600 hover:bg-blue-700',
+      icon: Truck,
+      description: 'Start pickup process'
+    });
+  }
+  
+  if (order.returnRequest?.status === 'out_for_pickup' || order.status === 'out_for_pickup') {
+    actions.push({
+      label: 'Near Pickup Location',
+      onClick: () => updateOrderStatus(order._id, 'pickup_near_location'),
+      color: 'bg-orange-600 hover:bg-orange-700',
+      icon: MapPin,
+      description: 'Update pickup location status'
+    });
+  }
+  
+  if (order.returnRequest?.status === 'pickup_near_location' || order.status === 'pickup_near_location') {
+    if (!hasPickupOTPGenerated) {
+      actions.push({
+        label: 'Generate Pickup OTP',
+        onClick: () => generatePickupOTPForOrder(order._id),
+        color: 'bg-purple-600 hover:bg-purple-700',
+        icon: Key,
+        description: 'Generate OTP for pickup verification'
+      });
+    }
+    
+    if (hasPickupOTPGenerated) {
+      actions.push({
+        label: 'Verify Pickup OTP',
+        onClick: () => setShowVerifyPickupOTPModal(true),
+        color: 'bg-green-600 hover:bg-green-700',
+        icon: Lock,
+        description: 'Verify pickup OTP'
+      });
+    }
+  }
+  
+  if (order.returnRequest?.status === 'pickup_completed' || order.status === 'pickup_completed') {
+    actions.push({
+      label: 'Request Refund',
+      onClick: () => setShowRefundRequestModal(true),
+      color: 'bg-red-600 hover:bg-red-700',
+      icon: DollarSign,
+      description: 'Request refund from manufacturer'
+    });
+  }
+
+  return actions;
+};
 
   return (
     <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
       {/* Header with Back Button */}
-      <div className="bg-gradient-to-r from-blue-600 to-indigo-700 text-white p-6">
+      <div className={`p-6 ${isReturnFlow ? 'bg-gradient-to-r from-purple-600 to-pink-700' : 'bg-gradient-to-r from-blue-600 to-indigo-700'} text-white`}>
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-4">
             <button
@@ -1601,8 +2059,10 @@ function OrderDetailView({
               <ArrowLeft size={24} />
             </button>
             <div>
-              <h2 className="text-2xl font-bold">Order #{order.orderNumber}</h2>
-              <p className="text-blue-100">
+              <h2 className="text-2xl font-bold">
+                {isReturnFlow ? 'Return Pickup' : 'Delivery'} - Order #{order.orderNumber}
+              </h2>
+              <p className={`${isReturnFlow ? 'text-purple-100' : 'text-blue-100'}`}>
                 {order.status === 'delivered' && order.deliveredAt 
                   ? `Delivered on ${formatDate(order.deliveredAt)}`
                   : order.assignedAt 
@@ -1637,7 +2097,9 @@ function OrderDetailView({
 
       {/* Status Timeline */}
       <div className="p-6 border-b border-gray-200">
-        <h3 className="text-lg font-bold text-gray-900 mb-6">Delivery Status</h3>
+        <h3 className="text-lg font-bold text-gray-900 mb-6">
+          {isReturnFlow ? 'Return Pickup Status' : 'Delivery Status'}
+        </h3>
         <div className="relative">
           {/* Connecting Line */}
           <div className="absolute left-8 top-4 bottom-4 w-0.5 bg-gray-200"></div>
@@ -1650,7 +2112,7 @@ function OrderDetailView({
                   step.isCompleted 
                     ? 'bg-green-100 text-green-600' 
                     : step.isActive 
-                    ? 'bg-blue-100 text-blue-600' 
+                    ? `${isReturnFlow ? 'bg-purple-100 text-purple-600' : 'bg-blue-100 text-blue-600'}` 
                     : 'bg-gray-100 text-gray-400'
                 }`}>
                   <Icon size={24} />
@@ -1666,9 +2128,19 @@ function OrderDetailView({
                   <p className="text-sm text-gray-500">
                     {step.isActive ? 'Current Status' : step.isCompleted ? 'Completed' : 'Pending'}
                   </p>
-                  {step.status === 'near_location' && step.isActive && hasOTPGenerated && (
+                  {(step.status === 'near_location' || step.status === 'pickup_near_location') && step.isActive && (hasOTPGenerated || hasPickupOTPGenerated) && (
                     <p className="text-sm text-green-600 mt-1">
                       ✓ OTP generated for customer verification
+                    </p>
+                  )}
+                  {step.status === 'pickup_completed' && step.isActive && (
+                    <p className="text-sm text-green-600 mt-1">
+                      ✓ Item collected successfully
+                    </p>
+                  )}
+                  {step.status === 'refund_requested' && step.isActive && (
+                    <p className="text-sm text-red-600 mt-1">
+                      ✓ Refund requested to manufacturer
                     </p>
                   )}
                 </div>
@@ -1697,7 +2169,9 @@ function OrderDetailView({
           <div className="bg-gray-50 p-4 rounded-lg">
             <div className="flex items-center space-x-3 mb-3">
               <MapPin size={20} className="text-blue-600" />
-              <h4 className="font-semibold text-gray-900">Delivery Address</h4>
+              <h4 className="font-semibold text-gray-900">
+                {isReturnFlow ? 'Pickup Address' : 'Delivery Address'}
+              </h4>
             </div>
             <p className="font-medium text-gray-900">{order.deliveryAddress?.street || 'N/A'}</p>
             <p className="text-gray-600 text-sm">
@@ -1709,27 +2183,29 @@ function OrderDetailView({
       </div>
 
       {/* OTP Status Section */}
-      {order.status === 'near_location' && (
+      {(order.status === 'near_location' || order.status === 'pickup_near_location') && (
         <div className="p-6 border-b border-gray-200 bg-purple-50">
           <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
             <Key size={20} className="mr-2 text-purple-600" />
-            Delivery OTP Status
+            {isReturnFlow ? 'Pickup OTP Status' : 'Delivery OTP Status'}
           </h3>
           
-          {hasOTPGenerated ? (
+          {(isReturnFlow ? hasPickupOTPGenerated : hasOTPGenerated) ? (
             <div className="bg-white p-6 rounded-lg border border-purple-200">
               <div className="flex items-center justify-center mb-4">
                 <Shield size={32} className="text-green-600 mr-3" />
                 <div>
                   <p className="font-semibold text-green-800">OTP Sent to Customer</p>
-                  <p className="text-sm text-green-700">Phone: <span className="font-bold">{otpSentTo || order.deliveryAddress?.phone || 'N/A'}</span></p>
+                  <p className="text-sm text-green-700">
+                    Phone: <span className="font-bold">{otpSentTo || order.deliveryAddress?.phone || 'N/A'}</span>
+                  </p>
                 </div>
               </div>
               <div className="bg-yellow-50 p-4 rounded border border-yellow-200">
                 <p className="text-sm text-yellow-800 font-semibold">Next Action Required:</p>
                 <p className="text-sm text-yellow-700">
                   The OTP has been sent to the customer's phone. Ask the customer for the OTP they received.
-                  Then click "Verify OTP & Deliver" and enter the OTP to complete the delivery.
+                  Then click "Verify OTP" and enter the OTP to {isReturnFlow ? 'complete the pickup' : 'complete the delivery'}.
                 </p>
               </div>
             </div>
@@ -1741,7 +2217,7 @@ function OrderDetailView({
                   <p className="font-semibold text-yellow-800">OTP Not Generated Yet</p>
                   <p className="text-sm text-yellow-700">
                     Click "Generate OTP" to send an OTP to the customer's phone.
-                    This is required before completing delivery.
+                    This is required before {isReturnFlow ? 'completing pickup' : 'completing delivery'}.
                   </p>
                 </div>
               </div>
@@ -1750,9 +2226,11 @@ function OrderDetailView({
         </div>
       )}
 
-      {/* Order Items */}
+      {/* Items Section */}
       <div className="p-6 border-b border-gray-200">
-        <h3 className="text-lg font-bold text-gray-900 mb-4">Items to Deliver ({order.items?.length || 0})</h3>
+        <h3 className="text-lg font-bold text-gray-900 mb-4">
+          {isReturnFlow ? 'Items to Pickup' : 'Items to Deliver'} ({order.items?.length || 0})
+        </h3>
         <div className="space-y-3">
           {order.items?.map((item, idx) => (
             <div key={idx} className="flex items-center space-x-4 p-3 bg-gray-50 rounded-lg">
@@ -1783,7 +2261,9 @@ function OrderDetailView({
 
       {/* Action Buttons */}
       <div className="p-6">
-        <h3 className="text-lg font-bold text-gray-900 mb-4">Delivery Actions</h3>
+        <h3 className="text-lg font-bold text-gray-900 mb-4">
+          {isReturnFlow ? 'Pickup Actions' : 'Delivery Actions'}
+        </h3>
         
         <div className="flex flex-wrap gap-3 mb-4">
           {getAvailableActions().map((action, index) => {
@@ -1815,16 +2295,18 @@ function OrderDetailView({
         </div>
 
         {/* Important Instructions */}
-        <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
-          <p className="text-sm text-blue-800 font-semibold mb-2">Delivery Instructions:</p>
-          <ul className="text-sm text-blue-700 space-y-1 list-disc list-inside">
-            {order.status === 'confirmed' && (
+        <div className={`p-4 rounded-lg border ${isReturnFlow ? 'bg-purple-50 border-purple-200' : 'bg-blue-50 border-blue-200'}`}>
+          <p className={`text-sm ${isReturnFlow ? 'text-purple-800' : 'text-blue-800'} font-semibold mb-2`}>
+            {isReturnFlow ? 'Pickup Instructions:' : 'Delivery Instructions:'}
+          </p>
+          <ul className={`text-sm ${isReturnFlow ? 'text-purple-700' : 'text-blue-700'} space-y-1 list-disc list-inside`}>
+            {!isReturnFlow && order.status === 'confirmed' && (
               <li>Click "Start Delivery" to begin the delivery process</li>
             )}
-            {order.status === 'out_for_delivery' && (
+            {!isReturnFlow && order.status === 'out_for_delivery' && (
               <li>When you are near the delivery location, click "Near Location"</li>
             )}
-            {order.status === 'near_location' && !hasOTPGenerated && (
+            {!isReturnFlow && order.status === 'near_location' && !hasOTPGenerated && (
               <>
                 <li>You are near the delivery location</li>
                 <li>Click "Generate OTP" to send a verification OTP to the customer</li>
@@ -1832,7 +2314,7 @@ function OrderDetailView({
                 <li>Ask the customer for the OTP they received</li>
               </>
             )}
-            {order.status === 'near_location' && hasOTPGenerated && (
+            {!isReturnFlow && order.status === 'near_location' && hasOTPGenerated && (
               <>
                 <li>OTP has been sent to customer's phone: <strong>{otpSentTo || order.deliveryAddress?.phone || 'N/A'}</strong></li>
                 <li>Ask the customer: "What is the OTP you received?"</li>
@@ -1841,17 +2323,48 @@ function OrderDetailView({
                 <li>System will verify if the OTP matches before completing delivery</li>
               </>
             )}
-            {order.status === 'delivered' && (
+            {isReturnFlow && order.status === 'return_requested' && (
+              <li>This return request is pending approval. Please wait for customer approval or contact them.</li>
+            )}
+            {isReturnFlow && order.returnRequest?.status === 'approved' && (
+              <li>Click "Out for Pickup" to begin the pickup process</li>
+            )}
+            {isReturnFlow && (order.returnRequest?.status === 'out_for_pickup' || order.status === 'out_for_pickup') && (
+              <li>When you are near the pickup location, click "Near Pickup Location"</li>
+            )}
+            {isReturnFlow && (order.returnRequest?.status === 'pickup_near_location' || order.status === 'pickup_near_location') && !hasPickupOTPGenerated && (
+              <>
+                <li>You are near the pickup location</li>
+                <li>Click "Generate Pickup OTP" to send a verification OTP to the customer</li>
+                <li>The OTP will be sent to: {order.deliveryAddress?.phone || 'N/A'}</li>
+                <li>Ask the customer for the pickup OTP they received</li>
+              </>
+            )}
+            {isReturnFlow && (order.returnRequest?.status === 'pickup_near_location' || order.status === 'pickup_near_location') && hasPickupOTPGenerated && (
+              <>
+                <li><strong>Pickup OTP has been sent to customer's phone: {order.deliveryAddress?.phone || 'N/A'}</strong></li>
+                <li><strong>Important:</strong> The OTP is only visible to the customer</li>
+                <li>Ask the customer: <strong>"What is the pickup OTP you received?"</strong></li>
+                <li>Enter the OTP that the customer tells you</li>
+                <li>Click "Verify Pickup OTP" to complete the pickup</li>
+              </>
+            )}
+            {isReturnFlow && (order.returnRequest?.status === 'pickup_completed' || order.status === 'pickup_completed') && (
+              <>
+                <li>Item has been successfully collected from the customer</li>
+                <li>Click "Request Refund" to notify the manufacturer to process the refund</li>
+              </>
+            )}
+            {isReturnFlow && (order.returnRequest?.status === 'refund_requested' || order.status === 'refund_requested') && (
+              <>
+                <li>Refund has been requested to the manufacturer</li>
+                <li>Manufacturer will process the refund within 5-7 business days</li>
+              </>
+            )}
+            {!isReturnFlow && order.status === 'delivered' && (
               <>
                 <li>This order has been delivered successfully</li>
                 <li>Customer can request returns within 14 days of delivery</li>
-              </>
-            )}
-            {isReturnRequested && (
-              <>
-                <li>Return has been requested for this order</li>
-                <li>Check the return status above for details</li>
-                <li>Contact customer for pickup scheduling if approved</li>
               </>
             )}
           </ul>
