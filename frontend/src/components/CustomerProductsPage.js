@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { 
   ShoppingCart, Package, LogOut, Search, ArrowLeft, 
   Star, Plus, Minus, X, Trash2, Wallet, ShieldCheck,
-  Database, CheckCircle2, MapPin, User, Phone
+  Database, CheckCircle2, MapPin, User, Phone, ChevronDown,
+  Users, UserCheck, CreditCard
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -20,12 +21,15 @@ export default function CustomerProductsPage() {
   const [showCart, setShowCart] = useState(false);
   const [showCheckout, setShowCheckout] = useState(false);
   const [showAddressModal, setShowAddressModal] = useState(false);
+  const [showAccountSelectModal, setShowAccountSelectModal] = useState(false);
   
-  const [account, setAccount] = useState(null);
+  const [accounts, setAccounts] = useState([]);
+  const [selectedAccount, setSelectedAccount] = useState(null);
   const [isMetaMaskInstalled, setIsMetaMaskInstalled] = useState(false);
   const [txStatus, setTxStatus] = useState(null);
   const [txStep, setTxStep] = useState(0);
   const [loadingLocation, setLoadingLocation] = useState(false);
+  const [loadingAccounts, setLoadingAccounts] = useState(false);
 
   const [deliveryAddress, setDeliveryAddress] = useState({
     name: '',
@@ -46,7 +50,7 @@ export default function CustomerProductsPage() {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
 
   const steps = [
-    { title: "Connecting MetaMask", icon: Wallet },
+    { title: "Connecting Wallet", icon: Wallet },
     { title: "Waiting for Signature", icon: ShieldCheck },
     { title: "Mining Transaction", icon: Database },
     { title: "Finalizing Purchase", icon: CheckCircle2 }
@@ -56,6 +60,12 @@ export default function CustomerProductsPage() {
     const savedCart = localStorage.getItem(`cart_${user._id}`);
     if (savedCart) {
       setCart(JSON.parse(savedCart));
+    }
+
+    // Load previously selected account
+    const savedAccount = localStorage.getItem(`selected_account_${user._id}`);
+    if (savedAccount) {
+      setSelectedAccount(savedAccount);
     }
   }, [user._id]);
 
@@ -73,11 +83,20 @@ export default function CustomerProductsPage() {
       
       const handleAccountsChanged = (accounts) => {
         if (accounts.length > 0) {
-          setAccount(accounts[0]);
-          localStorage.setItem(`wallet_${user._id}`, accounts[0]);
+          setAccounts(accounts);
+          // If we have a previously selected account that still exists, keep it
+          if (selectedAccount && accounts.includes(selectedAccount)) {
+            setSelectedAccount(selectedAccount);
+            localStorage.setItem(`selected_account_${user._id}`, selectedAccount);
+          } else if (accounts.length > 0) {
+            // Otherwise select the first account
+            setSelectedAccount(accounts[0]);
+            localStorage.setItem(`selected_account_${user._id}`, accounts[0]);
+          }
         } else {
-          setAccount(null);
-          localStorage.removeItem(`wallet_${user._id}`);
+          setAccounts([]);
+          setSelectedAccount(null);
+          localStorage.removeItem(`selected_account_${user._id}`);
         }
       };
 
@@ -98,8 +117,14 @@ export default function CustomerProductsPage() {
               method: 'eth_accounts' 
             });
             if (accounts.length > 0) {
-              setAccount(accounts[0]);
-              localStorage.setItem(`wallet_${user._id}`, accounts[0]);
+              setAccounts(accounts);
+              const savedAccount = localStorage.getItem(`selected_account_${user._id}`);
+              if (savedAccount && accounts.includes(savedAccount)) {
+                setSelectedAccount(savedAccount);
+              } else {
+                setSelectedAccount(accounts[0]);
+                localStorage.setItem(`selected_account_${user._id}`, accounts[0]);
+              }
             }
           }
         } catch (err) {
@@ -221,7 +246,7 @@ export default function CustomerProductsPage() {
     return cart.reduce((total, item) => total + item.quantity, 0);
   };
 
-  const connectWallet = async () => {
+  const fetchAccounts = async () => {
     if (!isMetaMaskInstalled) {
       alert('Please install MetaMask to proceed with checkout');
       window.open('https://metamask.io/download/', '_blank');
@@ -229,20 +254,41 @@ export default function CustomerProductsPage() {
     }
 
     try {
+      setLoadingAccounts(true);
+      
+      // First request permission to access accounts
       const accounts = await window.ethereum.request({ 
         method: 'eth_requestAccounts' 
       });
-      setAccount(accounts[0]);
-      localStorage.setItem(`wallet_${user._id}`, accounts[0]);
+      
+      if (accounts && accounts.length > 0) {
+        setAccounts(accounts);
+        setShowAccountSelectModal(true);
+      } else {
+        alert('No accounts found in MetaMask. Please add an account.');
+      }
     } catch (err) {
-      console.error('Error connecting wallet:', err);
-      alert('Failed to connect MetaMask');
+      console.error('Error fetching accounts:', err);
+      if (err.code === 4001) {
+        alert('You rejected the connection request. Please approve to continue.');
+      } else {
+        alert('Failed to connect to MetaMask');
+      }
+    } finally {
+      setLoadingAccounts(false);
     }
   };
 
+  const selectAccount = (account) => {
+    setSelectedAccount(account);
+    localStorage.setItem(`selected_account_${user._id}`, account);
+    setShowAccountSelectModal(false);
+  };
+
   const disconnectWallet = () => {
-    setAccount(null);
-    localStorage.removeItem(`wallet_${user._id}`);
+    setAccounts([]);
+    setSelectedAccount(null);
+    localStorage.removeItem(`selected_account_${user._id}`);
   };
 
   const getCurrentLocation = () => {
@@ -303,8 +349,9 @@ export default function CustomerProductsPage() {
   };
 
   const handleCheckout = async () => {
-    if (!account) {
-      await connectWallet();
+    if (!selectedAccount) {
+      // Show account selection modal
+      await fetchAccounts();
       return;
     }
 
@@ -331,18 +378,21 @@ export default function CustomerProductsPage() {
     try {
       setTxStep(1);
       
-      const accounts = await window.ethereum.request({ method: 'eth_accounts' });
-      if (accounts.length === 0) {
-        await connectWallet();
-        if (!account) {
-          throw new Error("Wallet connection required to proceed with purchase.");
+      // Check if we still have permission
+      const currentAccounts = await window.ethereum.request({ method: 'eth_accounts' });
+      if (currentAccounts.length === 0 || !currentAccounts.includes(selectedAccount)) {
+        // Re-request permission if needed
+        const accounts = await window.ethereum.request({ 
+          method: 'eth_requestAccounts' 
+        });
+        
+        if (!accounts.includes(selectedAccount)) {
+          // User selected a different account or denied permission
+          setShowAccountSelectModal(true);
+          setTxStatus(null);
+          setTxStep(0);
+          return;
         }
-      }
-
-      const currentAccount = accounts[0];
-      if (currentAccount !== account) {
-        setAccount(currentAccount);
-        localStorage.setItem(`wallet_${user._id}`, currentAccount);
       }
 
       const chainId = await window.ethereum.request({ method: 'eth_chainId' });
@@ -354,12 +404,12 @@ export default function CustomerProductsPage() {
 
       setTxStep(2);
       
-const transactionParameters = {
-  to: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
-  from: currentAccount,
-  value: '0x' + weiAmount.toString(16), // Remove BigInt
-  gas: '0x5208',
-};
+      const transactionParameters = {
+        to: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
+        from: selectedAccount,
+        value: '0x' + weiAmount.toString(16),
+        gas: '0x5208',
+      };
 
       console.log('📤 Sending transaction:', transactionParameters);
 
@@ -425,7 +475,7 @@ const transactionParameters = {
           totalAmount: getTotalPrice(),
           deliveryAddress,
           paymentDetails: {
-            walletAddress: currentAccount,
+            walletAddress: selectedAccount,
             paymentMethod: 'metamask',
             transactionHash: txHash,
             blockchainReceipt: receipt,
@@ -483,6 +533,7 @@ const transactionParameters = {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     localStorage.removeItem(`cart_${user._id}`);
+    localStorage.removeItem(`selected_account_${user._id}`);
     window.location.href = '/login';
   };
 
@@ -490,6 +541,11 @@ const transactionParameters = {
     product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     (product.description && product.description.toLowerCase().includes(searchTerm.toLowerCase()))
   );
+
+  const formatAddress = (address) => {
+    if (!address) return '';
+    return `${address.slice(0, 6)}...${address.slice(-4)}`;
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -855,23 +911,39 @@ const transactionParameters = {
                     </div>
                     
                     {/* Wallet Connection Section */}
-                    {account ? (
+                    {selectedAccount ? (
                       <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg">
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center space-x-2">
                             <Wallet size={18} className="text-green-600" />
                             <span className="text-sm font-semibold text-green-900">MetaMask Connected</span>
                           </div>
-                          <button
-                            onClick={disconnectWallet}
-                            className="text-xs text-red-600 hover:text-red-800 font-semibold"
-                          >
-                            Disconnect
-                          </button>
+                          <div className="flex items-center space-x-2">
+                            <button
+                              onClick={() => setShowAccountSelectModal(true)}
+                              className="text-xs text-blue-600 hover:text-blue-800 font-semibold"
+                            >
+                              Switch Account
+                            </button>
+                            <button
+                              onClick={disconnectWallet}
+                              className="text-xs text-red-600 hover:text-red-800 font-semibold"
+                            >
+                              Disconnect
+                            </button>
+                          </div>
                         </div>
-                        <p className="text-xs text-gray-600">
-                          {account.slice(0, 6)}...{account.slice(-4)}
-                        </p>
+                        <div className="flex items-center space-x-2 mt-2">
+                          <UserCheck size={14} className="text-gray-500" />
+                          <p className="text-xs font-medium text-gray-700">
+                            {formatAddress(selectedAccount)}
+                          </p>
+                        </div>
+                        {accounts.length > 1 && (
+                          <p className="text-xs text-gray-500 mt-1">
+                            {accounts.length - 1} other account{accounts.length > 2 ? 's' : ''} available
+                          </p>
+                        )}
                       </div>
                     ) : (
                       <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
@@ -883,20 +955,31 @@ const transactionParameters = {
                           Connect your MetaMask wallet to proceed with checkout
                         </p>
                         <button
-                          onClick={connectWallet}
-                          className="w-full py-2 bg-yellow-600 text-white rounded-lg font-semibold hover:bg-yellow-700 transition text-sm"
+                          onClick={fetchAccounts}
+                          disabled={loadingAccounts}
+                          className="w-full py-2 bg-yellow-600 text-white rounded-lg font-semibold hover:bg-yellow-700 transition text-sm flex items-center justify-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                          Connect MetaMask
+                          {loadingAccounts ? (
+                            <>
+                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                              <span>Connecting...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Wallet size={16} />
+                              <span>Connect MetaMask</span>
+                            </>
+                          )}
                         </button>
                       </div>
                     )}
                     
                     <button
                       onClick={handleCheckout}
-                      disabled={!account}
+                      disabled={!selectedAccount}
                       className="w-full py-4 bg-green-600 text-white rounded-xl font-bold text-lg hover:bg-green-700 transition-colors flex items-center justify-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      <Wallet size={24} />
+                      <CreditCard size={24} />
                       <span>Checkout with MetaMask</span>
                     </button>
                   </div>
@@ -907,11 +990,102 @@ const transactionParameters = {
         </div>
       )}
 
+      {/* Account Selection Modal */}
+      {showAccountSelectModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-8">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center space-x-3">
+                <Users size={24} className="text-blue-600" />
+                <h2 className="text-2xl font-bold text-gray-900">Select Account</h2>
+              </div>
+              <button
+                onClick={() => setShowAccountSelectModal(false)}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <X size={24} />
+              </button>
+            </div>
+
+            <p className="text-gray-600 mb-6 text-center">
+              Choose which MetaMask account to use for this transaction
+            </p>
+
+            {loadingAccounts ? (
+              <div className="text-center py-12">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
+                <p className="text-gray-600 mt-4">Loading accounts...</p>
+              </div>
+            ) : accounts.length === 0 ? (
+              <div className="text-center py-12">
+                <Users size={48} className="mx-auto text-gray-400 mb-4" />
+                <p className="text-gray-600">No accounts found</p>
+                <p className="text-sm text-gray-500 mt-2">Please add accounts to your MetaMask wallet</p>
+              </div>
+            ) : (
+              <div className="space-y-3 mb-6 max-h-60 overflow-y-auto pr-2">
+                {accounts.map((account, index) => (
+                  <button
+                    key={account}
+                    onClick={() => selectAccount(account)}
+                    className={`w-full p-4 rounded-xl flex items-center space-x-4 transition-all ${
+                      selectedAccount === account
+                        ? 'bg-blue-50 border-2 border-blue-500'
+                        : 'border border-gray-200 hover:border-blue-300 hover:bg-blue-50'
+                    }`}
+                  >
+                    <div className={`p-3 rounded-full ${selectedAccount === account ? 'bg-blue-600' : 'bg-gray-200'}`}>
+                      <UserCheck size={20} className={selectedAccount === account ? 'text-white' : 'text-gray-600'} />
+                    </div>
+                    <div className="flex-1 text-left">
+                      <div className="flex items-center justify-between">
+                        <h3 className="font-semibold text-gray-900">
+                          Account {index + 1}
+                        </h3>
+                        {selectedAccount === account && (
+                          <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">
+                            Selected
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-sm text-gray-600 font-mono">{formatAddress(account)}</p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="bg-blue-50 p-4 rounded-lg mb-6">
+              <p className="text-sm text-blue-800 text-center">
+                You can switch between accounts in MetaMask and refresh this page to see updated accounts
+              </p>
+            </div>
+
+            <button
+              onClick={() => setShowAccountSelectModal(false)}
+              className="w-full py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold hover:bg-gray-300 transition"
+            >
+              {selectedAccount ? 'Continue with Selected Account' : 'Cancel'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Delivery Address Modal */}
       {showAddressModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-2xl w-full p-8 max-h-[90vh] overflow-y-auto">
             <h2 className="text-2xl font-bold text-gray-900 mb-4">Delivery Address</h2>
+            
+            {selectedAccount && (
+              <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg">
+                <div className="flex items-center space-x-2">
+                  <Wallet size={18} className="text-green-600" />
+                  <span className="text-sm font-semibold text-green-900">Connected Account:</span>
+                  <span className="text-sm font-mono text-gray-700">{formatAddress(selectedAccount)}</span>
+                </div>
+              </div>
+            )}
             
             <button
               onClick={getCurrentLocation}
@@ -1054,6 +1228,14 @@ const transactionParameters = {
             <h2 className="text-2xl font-bold text-gray-900 mb-6 text-center">
               Processing Payment
             </h2>
+
+            <div className="mb-4 p-4 bg-blue-50 rounded-lg">
+              <div className="flex items-center space-x-2">
+                <Wallet size={18} className="text-blue-600" />
+                <span className="text-sm font-semibold text-blue-900">Using Account:</span>
+                <span className="text-sm font-mono text-gray-700">{formatAddress(selectedAccount)}</span>
+              </div>
+            </div>
 
             <div className="space-y-4 mb-8">
               {steps.map((step, index) => {
