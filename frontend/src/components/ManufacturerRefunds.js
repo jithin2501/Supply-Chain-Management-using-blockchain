@@ -5,7 +5,7 @@ import {
   Check, X, Loader2, FileText, User, Package, Truck,
   ChevronRight, ExternalLink, Calendar, CreditCard,
   Wallet, Banknote, Shield, ShieldCheck, Database, CheckCircle2,
-  Bug, Wrench, BarChart, Activity, Database as DatabaseIcon
+  Bug, Wrench, BarChart, Activity, Database as DatabaseIcon, Zap
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -131,17 +131,18 @@ export default function ManufacturerRefunds() {
 
   const fetchDebugInfo = async () => {
     try {
-      const response = await fetch(`${API_URL}/debug/refunds-data`, {
+      const response = await fetch(`${API_URL}/debug/check-manufacturer-refunds`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       
       if (!response.ok) throw new Error('Failed to fetch debug info');
       
       const data = await response.json();
-      setDebugInfo(data.debugInfo);
-      console.log('Debug info loaded:', data.debugInfo);
+      setDebugInfo(data);
+      console.log('Debug info loaded:', data);
     } catch (error) {
       console.error('Error fetching debug info:', error);
+      alert('Failed to fetch debug info. This endpoint may not be available.');
     }
   };
 
@@ -173,6 +174,47 @@ export default function ManufacturerRefunds() {
     } catch (error) {
       console.error('Error fixing refunds:', error);
       alert(`Failed to fix refunds: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const createMissingRefunds = async () => {
+    if (!window.confirm('This will create refund records for all orders with "refund_requested" status. Continue?')) {
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const response = await fetch(`${API_URL}/emergency/fix-refund-requested-orders`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.message || 'Failed to create refunds');
+      }
+
+      alert(
+        `✅ Emergency Fix Completed!\n\n` +
+        `Created: ${data.created || 0} refunds\n` +
+        `Skipped: ${data.skipped || 0} (already exist)\n` +
+        `Errors: ${data.errors || 0}\n\n` +
+        `The page will now refresh.`
+      );
+      
+      // Refresh data
+      fetchRefunds();
+      if (debugInfo) fetchDebugInfo();
+      
+    } catch (error) {
+      console.error('Error creating refunds:', error);
+      alert(`Failed to create refunds: ${error.message}`);
     } finally {
       setLoading(false);
     }
@@ -597,6 +639,43 @@ export default function ManufacturerRefunds() {
         </div>
       </div>
 
+      {/* Emergency Fix Banner (shown when no refunds) */}
+      {refunds.length === 0 && !loading && (
+        <div className="max-w-7xl mx-auto mb-6">
+          <div className="bg-gradient-to-r from-orange-50 to-red-50 border-2 border-orange-300 rounded-xl p-6">
+            <div className="flex items-start space-x-4">
+              <div className="bg-orange-100 p-3 rounded-lg">
+                <AlertCircle size={32} className="text-orange-600" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-xl font-bold text-gray-900 mb-2">No Refunds Found</h3>
+                <p className="text-gray-700 mb-4">
+                  If customers have requested refunds but they're not showing up here, you may need to create the refund records.
+                  This can happen if refund requests were made before the refund system was fully configured.
+                </p>
+                <div className="flex items-center space-x-3">
+                  <button
+                    onClick={createMissingRefunds}
+                    disabled={loading}
+                    className="flex items-center space-x-2 px-6 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition disabled:bg-gray-400 disabled:cursor-not-allowed"
+                  >
+                    <Zap size={20} />
+                    <span>{loading ? 'Processing...' : 'Create Missing Refunds'}</span>
+                  </button>
+                  <button
+                    onClick={() => setShowDebugPanel(true)}
+                    className="flex items-center space-x-2 px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition"
+                  >
+                    <Bug size={20} />
+                    <span>Open Debug Panel</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Debug Panel */}
       {showDebugPanel && (
         <div className="max-w-7xl mx-auto mb-6 bg-white rounded-xl shadow-sm p-6">
@@ -619,51 +698,59 @@ export default function ManufacturerRefunds() {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="bg-gray-50 p-4 rounded-lg">
                   <p className="text-sm text-gray-600">Total Refunds in System</p>
-                  <p className="text-2xl font-bold text-gray-900">{debugInfo.totalRefundsInSystem}</p>
+                  <p className="text-2xl font-bold text-gray-900">{debugInfo.totalRefunds || 0}</p>
+                </div>
+                <div className="bg-gray-50 p-4 rounded-lg">
+                  <p className="text-sm text-gray-600">Your Refunds</p>
+                  <p className="text-2xl font-bold text-gray-900">{debugInfo.myRefunds || 0}</p>
+                </div>
+                <div className="bg-gray-50 p-4 rounded-lg">
+                  <p className="text-sm text-gray-600">Orders with Return Requests</p>
+                  <p className="text-2xl font-bold text-gray-900">{debugInfo.returnOrders || 0}</p>
                 </div>
                 <div className="bg-gray-50 p-4 rounded-lg">
                   <p className="text-sm text-gray-600">Your Products</p>
-                  <p className="text-2xl font-bold text-gray-900">{debugInfo.manufacturerProducts}</p>
-                </div>
-                <div className="bg-gray-50 p-4 rounded-lg">
-                  <p className="text-sm text-gray-600">Orders with Returns</p>
-                  <p className="text-2xl font-bold text-gray-900">{debugInfo.returnOrders}</p>
-                </div>
-                <div className="bg-gray-50 p-4 rounded-lg">
-                  <p className="text-sm text-gray-600">Direct Refunds Found</p>
-                  <p className="text-2xl font-bold text-gray-900">{debugInfo.directRefunds}</p>
+                  <p className="text-2xl font-bold text-gray-900">{debugInfo.myProducts || 0}</p>
                 </div>
               </div>
               
               <div className="bg-yellow-50 p-4 rounded-lg border border-yellow-200">
-                <h4 className="font-semibold text-yellow-800 mb-2">Debug Actions</h4>
-                <div className="flex space-x-3">
+                <h4 className="font-semibold text-yellow-800 mb-3">Emergency Actions</h4>
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    onClick={createMissingRefunds}
+                    className="flex items-center space-x-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition"
+                    disabled={loading}
+                  >
+                    <Zap size={16} />
+                    <span>{loading ? 'Creating...' : 'Create Missing Refunds'}</span>
+                  </button>
                   <button
                     onClick={fixManufacturerRefunds}
                     className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition"
                     disabled={loading}
                   >
                     <Wrench size={16} />
-                    <span>{loading ? 'Fixing...' : 'Fix Missing Manufacturer IDs'}</span>
+                    <span>{loading ? 'Fixing...' : 'Fix Manufacturer IDs'}</span>
                   </button>
                   <button
                     onClick={() => {
                       console.log('Debug Info:', debugInfo);
-                      alert(`Check console for detailed debug information.\n\nManufacturer ID: ${debugInfo.manufacturerId}`);
+                      alert(`Check console for detailed debug information.\n\nManufacturer ID: ${debugInfo.manufacturerId || user._id}`);
                     }}
                     className="flex items-center space-x-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition"
                   >
                     <DatabaseIcon size={16} />
-                    <span>View Raw Data in Console</span>
+                    <span>View Raw Data</span>
                   </button>
                 </div>
               </div>
               
-              {debugInfo.directRefundsList && debugInfo.directRefundsList.length > 0 && (
+              {debugInfo.myRefundsList && debugInfo.myRefundsList.length > 0 && (
                 <div>
                   <h4 className="font-semibold text-gray-900 mb-2">Your Refunds Found:</h4>
                   <div className="space-y-2">
-                    {debugInfo.directRefundsList.map((refund, idx) => (
+                    {debugInfo.myRefundsList.map((refund, idx) => (
                       <div key={idx} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                         <div>
                           <p className="font-medium text-gray-900">#{refund.orderNumber}</p>
@@ -732,22 +819,8 @@ export default function ManufacturerRefunds() {
               <p className="text-gray-500 mb-6">
                 {filters.status !== 'all' || filters.search
                   ? 'Try adjusting your filters'
-                  : 'Refund requests will appear here after delivery partners process returns'}
+                  : 'Refund requests will appear here when customers request returns'}
               </p>
-              <div className="flex justify-center space-x-3">
-                <button
-                  onClick={() => setShowDebugPanel(true)}
-                  className="px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition"
-                >
-                  Open Debug Panel
-                </button>
-                <button
-                  onClick={fetchRefunds}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
-                >
-                  Refresh
-                </button>
-              </div>
             </div>
           ) : (
             <div className="overflow-x-auto">

@@ -1504,6 +1504,84 @@ apiRouter.put('/manufacturer/refunds/:refundId/process', authenticateToken, asyn
       refund.transactionHash = transactionHash;
       refund.notes = notes || refund.notes;
       refund.updatedAt = new Date();
+      if (order.returnRequest.status === 'refund_requested') {
+  try {
+    const customer = await User.findById(order.customer);
+    const manufacturerMap = new Map();
+
+    // Group items by manufacturer
+    for (const item of order.items) {
+      const product = await ManufacturedProduct.findById(item.product);
+      if (!product || !product.manufacturerId) continue;
+
+      const manufacturerId = product.manufacturerId.toString();
+      const manufacturer = await User.findById(manufacturerId);
+      if (!manufacturer) continue;
+
+      if (!manufacturerMap.has(manufacturerId)) {
+        manufacturerMap.set(manufacturerId, {
+          manufacturerId: manufacturer._id,
+          manufacturerName: manufacturer.name,
+          manufacturerEmail: manufacturer.email,
+          items: []
+        });
+      }
+
+      manufacturerMap.get(manufacturerId).items.push({
+        productId: product._id,
+        productName: product.name,
+        quantity: item.quantity,
+        price: item.price,
+        subtotal: item.price * item.quantity
+      });
+    }
+
+    // Create refund for each manufacturer
+    for (const [manufacturerId, data] of manufacturerMap) {
+      const totalAmount = data.items.reduce((sum, item) => sum + item.subtotal, 0);
+      
+      const refund = new Refund({
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        customerId: customer._id,
+        customerName: customer.name,
+        customerEmail: customer.email,
+        manufacturerId: data.manufacturerId,
+        manufacturerName: data.manufacturerName,
+        manufacturerEmail: data.manufacturerEmail,
+        deliveryPartnerId: order.deliveryPartner,
+        deliveryPartnerName: order.deliveryPartner?.name,
+        items: data.items,
+        totalAmount: totalAmount,
+        reason: order.returnRequest.reason || 'Product return',
+        refundMethod: 'wallet',
+        status: 'pending',
+        walletAddress: customer.walletAddress || order.paymentDetails?.walletAddress,
+        trackingHistory: [{
+          status: 'pending',
+          message: 'Refund request received from customer',
+          timestamp: new Date(),
+          updatedBy: {
+            userId: customer._id,
+            name: customer.name,
+            role: 'customer'
+          }
+        }]
+      });
+
+      await refund.save();
+      
+      // Link refund to order
+      order.returnRequest.refundId = refund._id;
+      await order.save();
+
+      console.log(`✅ Created refund for order ${order.orderNumber} - ${data.manufacturerName}: ₹${totalAmount}`);
+    }
+  } catch (err) {
+    console.error('❌ Error creating refund:', err);
+    throw err;
+  }
+}
       
       // Add to tracking history
       refund.trackingHistory.push({
@@ -1544,7 +1622,6 @@ apiRouter.put('/manufacturer/refunds/:refundId/process', authenticateToken, asyn
         
         await order.save();
       }
-
       await refund.save();
 
       console.log(`💰 Refund ${refund.orderNumber} completed: ₹${refund.totalAmount} sent to customer`);
@@ -1775,7 +1852,146 @@ apiRouter.post('/manufacturer/create-refund-for-order/:orderNumber', authenticat
     });
   }
 });
-
+// ========== DIRECT FIX: CREATE REFUND FOR SPECIFIC ORDER ==========
+apiRouter.post('/direct-fix/order-refund/:orderNumber', authenticateToken, async (req, res) => {
+    try {
+        const { orderNumber } = req.params;
+        const manufacturerId = req.user.userId;
+        
+        console.log(`🔧 DIRECT FIX: Creating refund for order ${orderNumber} for manufacturer ${manufacturerId}`);
+        
+        // Find the order
+        const order = await Order.findOne({ orderNumber })
+            .populate('items.product')
+            .populate('customer', 'name email walletAddress');
+        
+        if (!order) {
+            return res.status(404).json({ 
+                success: false,
+                message: `Order ${orderNumber} not found` 
+            });
+        }
+        
+        console.log(`📦 Order status: ${order.status}, Return status: ${order.returnRequest?.status}`);
+        
+        // Get manufacturer details
+        const manufacturer = await User.findById(manufacturerId);
+        if (!manufacturer) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Manufacturer not found' 
+            });
+        }
+        
+        // Get manufacturer's products
+        const manufacturerProducts = await ManufacturedProduct.find({
+            manufacturerId: manufacturerId
+        });
+        
+        const manufacturerProductIds = manufacturerProducts.map(p => p._id.toString());
+        
+        // Filter items that belong to this manufacturer
+        const manufacturerItems = [];
+        
+        for (const item of order.items) {
+            if (!item.product) continue;
+            
+            const productId = item.product._id?.toString() || item.product?.toString();
+            if (manufacturerProductIds.includes(productId)) {
+                manufacturerItems.push({
+                    productId: item.product._id || item.product,
+                    productName: item.product?.name || 'Product',
+                    quantity: item.quantity,
+                    price: item.price,
+                    subtotal: item.price * item.quantity
+                });
+            }
+        }
+        
+        if (manufacturerItems.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'No items in this order belong to your manufacturing company'
+            });
+        }
+        
+        // Calculate total amount
+        const totalAmount = manufacturerItems.reduce((sum, item) => sum + item.subtotal, 0);
+        
+        // Check if refund already exists
+        const existingRefund = await Refund.findOne({
+            orderNumber: orderNumber,
+            manufacturerId: manufacturerId
+        });
+        
+        if (existingRefund) {
+            console.log(`✅ Refund already exists: ${existingRefund._id}`);
+            return res.json({
+                success: true,
+                message: 'Refund already exists',
+                refund: existingRefund
+            });
+        }
+        
+        // Create refund
+        const refund = new Refund({
+            orderId: order._id,
+            orderNumber: order.orderNumber,
+            customerId: order.customer,
+            customerName: order.customer?.name || 'Customer',
+            customerEmail: order.customer?.email || 'email@example.com',
+            manufacturerId: manufacturerId,
+            manufacturerName: manufacturer.name,
+            manufacturerEmail: manufacturer.email,
+            items: manufacturerItems,
+            totalAmount: totalAmount,
+            reason: order.returnRequest?.reason || 'Direct refund creation',
+            refundMethod: 'wallet',
+            status: 'pending',
+            walletAddress: order.customer?.walletAddress || order.paymentDetails?.walletAddress,
+            trackingHistory: [{
+                status: 'pending',
+                message: 'Refund created via direct fix endpoint',
+                timestamp: new Date(),
+                updatedBy: {
+                    userId: manufacturerId,
+                    name: manufacturer.name,
+                    role: 'manufacturer'
+                }
+            }]
+        });
+        
+        await refund.save();
+        
+        // Update order with refund ID
+        if (order.returnRequest) {
+            order.returnRequest.refundId = refund._id;
+            await order.save();
+        }
+        
+        console.log(`✅ REFUND CREATED SUCCESSFULLY: ${refund._id} for ₹${totalAmount}`);
+        
+        res.json({
+            success: true,
+            message: `Refund created successfully for ₹${totalAmount}`,
+            refund: {
+                _id: refund._id,
+                orderNumber: refund.orderNumber,
+                amount: refund.totalAmount,
+                status: refund.status,
+                createdAt: refund.createdAt
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Direct fix error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to create refund',
+            error: error.message
+        });
+    }
+});
 // ========== CHECK ORDERS WITH RETURNS ==========
 apiRouter.get('/manufacturer/orders-with-returns', authenticateToken, async (req, res) => {
   try {
@@ -1864,6 +2080,164 @@ apiRouter.get('/manufacturer/orders-with-returns', authenticateToken, async (req
       error: error.message
     });
   }
+});
+// DIRECT FIX: Create refund for ORD-1770498699788-RO75RD
+apiRouter.post('/emergency/create-refund-for-ORD-1770498699788-RO75RD', authenticateToken, async (req, res) => {
+    try {
+        const orderNumber = 'ORD-1770498699788-RO75RD';
+        const manufacturerId = req.user.userId;
+        
+        console.log(`🚨 EMERGENCY FIX: Creating refund for ${orderNumber} for manufacturer ${manufacturerId}`);
+        
+        // 1. Find the order
+        const order = await Order.findOne({ orderNumber })
+            .populate('items.product')
+            .populate('customer', 'name email walletAddress')
+            .populate('deliveryPartner', 'name email');
+        
+        if (!order) {
+            return res.status(404).json({ 
+                success: false, 
+                message: `Order ${orderNumber} not found` 
+            });
+        }
+        
+        console.log(`📊 Order status: ${order.status}, Return status: ${order.returnRequest?.status}`);
+        
+        // 2. Get manufacturer details
+        const manufacturer = await User.findById(manufacturerId);
+        if (!manufacturer) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Manufacturer not found' 
+            });
+        }
+        
+        // 3. Check which products belong to this manufacturer
+        const manufacturerItems = [];
+        let totalAmount = 0;
+        
+        console.log('🔍 Checking items in order:');
+        for (const item of order.items) {
+            console.log(`Item: ${item.product?.name || 'Unknown'}, Product ID: ${item.product?._id}`);
+            
+            if (!item.product) continue;
+            
+            // Check if this product belongs to the current manufacturer
+            const product = await ManufacturedProduct.findOne({
+                _id: item.product._id || item.product,
+                manufacturerId: manufacturerId
+            });
+            
+            if (product) {
+                console.log(`✅ Product ${product.name} belongs to manufacturer ${manufacturer.name}`);
+                
+                manufacturerItems.push({
+                    productId: product._id,
+                    productName: product.name,
+                    quantity: item.quantity,
+                    price: item.price,
+                    subtotal: item.price * item.quantity
+                });
+                
+                totalAmount += item.price * item.quantity;
+            } else {
+                console.log(`❌ Product does not belong to manufacturer ${manufacturer.name}`);
+            }
+        }
+        
+        if (manufacturerItems.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'No items in this order belong to your manufacturing company'
+            });
+        }
+        
+        console.log(`💰 Total amount for manufacturer: £${totalAmount}`);
+        
+        // 4. Check if refund already exists
+        const existingRefund = await Refund.findOne({
+            orderNumber: orderNumber,
+            manufacturerId: manufacturerId
+        });
+        
+        if (existingRefund) {
+            console.log(`✅ Refund already exists: ${existingRefund._id}`);
+            return res.json({
+                success: true,
+                message: 'Refund already exists',
+                refund: existingRefund,
+                nextStep: 'Refresh refund management page to process it'
+            });
+        }
+        
+        // 5. Get customer
+        const customer = await User.findById(order.customer);
+        
+        // 6. Create refund
+        const refund = new Refund({
+            orderId: order._id,
+            orderNumber: order.orderNumber,
+            customerId: order.customer,
+            customerName: customer?.name || order.deliveryAddress?.name || 'Customer',
+            customerEmail: customer?.email || 'customer@example.com',
+            manufacturerId: manufacturerId,
+            manufacturerName: manufacturer.name,
+            manufacturerEmail: manufacturer.email,
+            deliveryPartnerId: order.deliveryPartner?._id,
+            deliveryPartnerName: order.deliveryPartner?.name,
+            items: manufacturerItems,
+            totalAmount: totalAmount,
+            reason: order.returnRequest?.reason || 'Return processed - Emergency fix',
+            refundMethod: 'wallet',
+            status: 'pending',
+            walletAddress: customer?.walletAddress || order.paymentDetails?.walletAddress,
+            trackingHistory: [{
+                status: 'pending',
+                message: 'Refund created via emergency fix for specific order',
+                timestamp: new Date(),
+                updatedBy: {
+                    userId: manufacturerId,
+                    name: manufacturer.name,
+                    role: 'manufacturer'
+                }
+            }]
+        });
+        
+        await refund.save();
+        
+        // 7. Update order with refund ID
+        if (order.returnRequest) {
+            order.returnRequest.refundId = refund._id;
+            await order.save();
+        }
+        
+        console.log(`✅ SUCCESS: Created refund ${refund._id} for £${totalAmount}`);
+        
+        res.json({
+            success: true,
+            message: `Refund created successfully for £${totalAmount}`,
+            refund: {
+                _id: refund._id,
+                orderNumber: refund.orderNumber,
+                customerName: refund.customerName,
+                totalAmount: refund.totalAmount,
+                status: refund.status,
+                itemsCount: refund.items.length,
+                walletAddress: refund.walletAddress,
+                createdAt: refund.createdAt
+            },
+            instructions: 'Go to Refund Management page to process this refund'
+        });
+        
+    } catch (error) {
+        console.error('❌ Emergency fix error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to create refund',
+            error: error.message
+        });
+    }
 });
 
 // ========== 7. REVENUE SUMMARY (EXISTING - NO CHANGES) ==========
@@ -3111,78 +3485,84 @@ apiRouter.put('/delivery/orders/:orderId/return-status', authenticateToken, asyn
       order.pickupOTP = order.returnRequest.pickupOTP;
     }
 
-    if (status === 'pickup_completed') {
-      order.returnRequest.pickupCompletedAt = new Date();
-      
-      // Create refund record for manufacturer
-      const customer = await User.findById(order.customer);
-      const manufacturerProducts = [];
-      
-      // Get manufacturer for each product
-      for (const item of order.items) {
+if (status === 'pickup_completed') {
+    order.returnRequest.pickupCompletedAt = new Date();
+    
+    // Create refund record for manufacturer
+    const customer = await User.findById(order.customer);
+    const manufacturerProducts = [];
+    
+    // Get manufacturer for each product
+    for (const item of order.items) {
         const product = await ManufacturedProduct.findById(item.product).populate('manufacturerId');
         if (product && product.manufacturerId) {
-          manufacturerProducts.push({
-            product,
-            item
-          });
+            manufacturerProducts.push({
+                product,
+                item,
+                manufacturerId: product.manufacturerId._id || product.manufacturerId,
+                manufacturerName: product.manufacturerId.name,
+                manufacturerEmail: product.manufacturerId.email
+            });
         }
-      }
+    }
 
-      // Group by manufacturer and create refunds
-      const manufacturerMap = new Map();
-      
-      for (const { product, item } of manufacturerProducts) {
-        const manufacturerId = product.manufacturerId._id.toString();
+    // Group by manufacturer and create refunds
+    const manufacturerMap = new Map();
+    
+    for (const { product, item, manufacturerId, manufacturerName, manufacturerEmail } of manufacturerProducts) {
+        const manufIdStr = manufacturerId.toString();
         
-        if (!manufacturerMap.has(manufacturerId)) {
-          manufacturerMap.set(manufacturerId, {
-            manufacturerId: product.manufacturerId._id,
-            manufacturerName: product.manufacturerId.name,
-            manufacturerEmail: product.manufacturerId.email,
-            items: []
-          });
+        if (!manufacturerMap.has(manufIdStr)) {
+            manufacturerMap.set(manufIdStr, {
+                manufacturerId: manufacturerId,
+                manufacturerName: manufacturerName,
+                manufacturerEmail: manufacturerEmail,
+                items: []
+            });
         }
         
-        manufacturerMap.get(manufacturerId).items.push({
-          productId: product._id,
-          productName: product.name,
-          quantity: item.quantity,
-          price: item.price,
-          subtotal: item.price * item.quantity
+        manufacturerMap.get(manufIdStr).items.push({
+            productId: product._id,
+            productName: product.name,
+            quantity: item.quantity,
+            price: item.price,
+            subtotal: item.price * item.quantity
         });
-      }
+    }
 
-      // Create refund for each manufacturer
-      for (const [manufacturerId, data] of manufacturerMap) {
+    // Create refund for each manufacturer
+    for (const [manufacturerIdStr, data] of manufacturerMap) {
         const totalAmount = data.items.reduce((sum, item) => sum + item.subtotal, 0);
         
+        console.log(`💰 Creating refund for manufacturer ${data.manufacturerName} (${manufacturerIdStr}): ₹${totalAmount}`);
+        
         const refund = new Refund({
-          orderId: order._id,
-          orderNumber: order.orderNumber,
-          customerId: order.customer,
-          customerName: customer.name,
-          customerEmail: customer.email,
-          manufacturerId: data.manufacturerId,
-          manufacturerName: data.manufacturerName,
-          manufacturerEmail: data.manufacturerEmail,
-          deliveryPartnerId: req.user.userId,
-          deliveryPartnerName: deliveryPartner.name,
-          items: data.items,
-          totalAmount,
-          reason: order.returnRequest.reason,
-          status: 'pending',
-          walletAddress: customer.walletAddress || order.paymentDetails?.walletAddress,
-          trackingHistory: [{
+            orderId: order._id,
+            orderNumber: order.orderNumber,
+            customerId: order.customer,
+            customerName: customer.name,
+            customerEmail: customer.email,
+            manufacturerId: data.manufacturerId,
+            manufacturerName: data.manufacturerName,
+            manufacturerEmail: data.manufacturerEmail,
+            deliveryPartnerId: req.user.userId,
+            deliveryPartnerName: deliveryPartner.name,
+            items: data.items,
+            totalAmount: totalAmount,
+            reason: order.returnRequest.reason,
+            refundMethod: 'wallet',
             status: 'pending',
-            message: 'Refund created after successful pickup',
-            timestamp: new Date(),
-            updatedBy: {
-              userId: req.user.userId,
-              name: deliveryPartner.name,
-              role: 'delivery_partner'
-            }
-          }]
+            walletAddress: customer.walletAddress || order.paymentDetails?.walletAddress,
+            trackingHistory: [{
+                status: 'pending',
+                message: 'Refund created after successful pickup',
+                timestamp: new Date(),
+                updatedBy: {
+                    userId: req.user.userId,
+                    name: deliveryPartner.name,
+                    role: 'delivery_partner'
+                }
+            }]
         });
 
         await refund.save();
@@ -3190,10 +3570,10 @@ apiRouter.put('/delivery/orders/:orderId/return-status', authenticateToken, asyn
         // Link refund to order
         order.returnRequest.refundId = refund._id;
         
-        console.log(`✅ Refund created for manufacturer ${data.manufacturerName}: ₹${totalAmount}`);
-      }
-
+        console.log(`✅ Refund created for manufacturer ${data.manufacturerName}: ₹${totalAmount}, ID: ${refund._id}`);
     }
+
+}
 
     if (status === 'refund_requested') {
       // Update refund status if exists
@@ -4166,7 +4546,169 @@ apiRouter.get('/manufacturer/refunds-summary', authenticateToken, async (req, re
     });
   }
 });
+// ========== EMERGENCY FIX: FORCE CREATE REFUNDS ==========
+apiRouter.post('/emergency/create-refunds', authenticateToken, async (req, res) => {
+    try {
+        console.log('🚨 EMERGENCY: Creating missing refunds for all manufacturers');
+        
+        // Get ALL orders with return requests
+        const returnOrders = await Order.find({
+            'returnRequest.requested': true,
+            'returnRequest.status': { $in: ['pickup_completed', 'refund_requested', 'approved'] }
+        })
+            .populate('items.product')
+            .populate('customer', 'name email walletAddress')
+            .populate('deliveryPartner', 'name email');
 
+        console.log(`Found ${returnOrders.length} orders with return requests`);
+
+        const results = [];
+        const errors = [];
+
+        for (const order of returnOrders) {
+            try {
+                console.log(`Processing order: ${order.orderNumber}`);
+                
+                // Get customer
+                const customer = await User.findById(order.customer);
+                if (!customer) {
+                    errors.push({ orderNumber: order.orderNumber, error: 'Customer not found' });
+                    continue;
+                }
+
+                // Process each item to find manufacturers
+                const manufacturerMap = new Map();
+
+                for (const item of order.items) {
+                    if (!item.product) continue;
+                    
+                    // Find the product
+                    const product = await ManufacturedProduct.findById(item.product).populate('manufacturerId');
+                    if (!product || !product.manufacturerId) {
+                        console.log(`❌ Product not found or has no manufacturer for item in order ${order.orderNumber}`);
+                        continue;
+                    }
+
+                    const manufacturerId = product.manufacturerId._id.toString();
+                    const manufacturer = await User.findById(manufacturerId);
+                    
+                    if (!manufacturer) {
+                        console.log(`❌ Manufacturer not found: ${manufacturerId}`);
+                        continue;
+                    }
+
+                    if (!manufacturerMap.has(manufacturerId)) {
+                        manufacturerMap.set(manufacturerId, {
+                            manufacturerId: manufacturer._id,
+                            manufacturerName: manufacturer.name,
+                            manufacturerEmail: manufacturer.email,
+                            items: []
+                        });
+                    }
+
+                    manufacturerMap.get(manufacturerId).items.push({
+                        productId: product._id,
+                        productName: product.name,
+                        quantity: item.quantity,
+                        price: item.price,
+                        subtotal: item.price * item.quantity
+                    });
+                }
+
+                // Create refunds for each manufacturer
+                for (const [manufacturerId, data] of manufacturerMap) {
+                    const totalAmount = data.items.reduce((sum, item) => sum + item.subtotal, 0);
+                    
+                    // Check if refund already exists
+                    const existingRefund = await Refund.findOne({
+                        orderNumber: order.orderNumber,
+                        manufacturerId: data.manufacturerId
+                    });
+
+                    if (existingRefund) {
+                        console.log(`✅ Refund already exists for ${order.orderNumber} - manufacturer ${data.manufacturerName}`);
+                        results.push({
+                            status: 'exists',
+                            orderNumber: order.orderNumber,
+                            manufacturerName: data.manufacturerName,
+                            amount: totalAmount,
+                            refundId: existingRefund._id
+                        });
+                        continue;
+                    }
+
+                    // Create new refund
+                    const refund = new Refund({
+                        orderId: order._id,
+                        orderNumber: order.orderNumber,
+                        customerId: order.customer,
+                        customerName: customer.name,
+                        customerEmail: customer.email,
+                        manufacturerId: data.manufacturerId,
+                        manufacturerName: data.manufacturerName,
+                        manufacturerEmail: data.manufacturerEmail,
+                        deliveryPartnerId: order.deliveryPartner?._id,
+                        deliveryPartnerName: order.deliveryPartner?.name,
+                        items: data.items,
+                        totalAmount: totalAmount,
+                        reason: order.returnRequest.reason || 'Return processed via emergency fix',
+                        refundMethod: 'wallet',
+                        status: 'pending',
+                        walletAddress: customer.walletAddress || order.paymentDetails?.walletAddress,
+                        trackingHistory: [{
+                            status: 'pending',
+                            message: 'Refund created via emergency fix',
+                            timestamp: new Date(),
+                            updatedBy: {
+                                userId: req.user.userId,
+                                name: 'Emergency System',
+                                role: 'system'
+                            }
+                        }]
+                    });
+
+                    await refund.save();
+
+                    // Update order with refund ID
+                    order.returnRequest.refundId = refund._id;
+                    await order.save();
+
+                    console.log(`✅ Created refund for ${order.orderNumber} - manufacturer ${data.manufacturerName}: ₹${totalAmount}`);
+                    
+                    results.push({
+                        status: 'created',
+                        orderNumber: order.orderNumber,
+                        manufacturerName: data.manufacturerName,
+                        amount: totalAmount,
+                        refundId: refund._id
+                    });
+                }
+
+            } catch (err) {
+                console.error(`❌ Error processing order ${order.orderNumber}:`, err.message);
+                errors.push({ orderNumber: order.orderNumber, error: err.message });
+            }
+        }
+
+        res.json({
+            success: true,
+            message: `Processed ${returnOrders.length} orders`,
+            created: results.filter(r => r.status === 'created').length,
+            existing: results.filter(r => r.status === 'exists').length,
+            errors: errors.length,
+            results: results,
+            errors: errors
+        });
+
+    } catch (err) {
+        console.error('❌ Emergency refund creation failed:', err);
+        res.status(500).json({ 
+            success: false,
+            message: 'Emergency refund creation failed',
+            error: err.message 
+        });
+    }
+});
 // Debug endpoint to check why refunds aren't showing
 apiRouter.get('/debug/check-manufacturer-refunds', authenticateToken, async (req, res) => {
   try {
@@ -4216,6 +4758,140 @@ apiRouter.get('/debug/check-manufacturer-refunds', authenticateToken, async (req
   }
 });
 
+// ========== EMERGENCY FIX ENDPOINT - CREATE MISSING REFUNDS ==========
+apiRouter.post('/emergency/fix-refund-requested-orders', authenticateToken, async (req, res) => {
+  try {
+    console.log('🔧 Starting emergency refund creation for refund_requested orders...');
+
+    const ordersWithRefundRequests = await Order.find({
+      'returnRequest.status': 'refund_requested'
+    })
+      .populate('items.product')
+      .populate('customer', 'name email walletAddress')
+      .populate('deliveryPartner', 'name email');
+
+    console.log(`Found ${ordersWithRefundRequests.length} orders with refund_requested status`);
+
+    const results = [];
+    const errors = [];
+
+    for (const order of ordersWithRefundRequests) {
+      try {
+        console.log(`Processing order: ${order.orderNumber}`);
+        
+        const existingRefunds = await Refund.find({ orderNumber: order.orderNumber });
+        if (existingRefunds.length > 0) {
+          console.log(`✅ Refunds already exist for ${order.orderNumber}`);
+          results.push({ status: 'skipped', orderNumber: order.orderNumber });
+          continue;
+        }
+
+        const customer = await User.findById(order.customer._id || order.customer);
+        if (!customer) {
+          errors.push({ orderNumber: order.orderNumber, error: 'Customer not found' });
+          continue;
+        }
+
+        const manufacturerMap = new Map();
+
+        for (const item of order.items) {
+          if (!item.product) continue;
+          
+          const product = await ManufacturedProduct.findById(item.product._id || item.product);
+          if (!product || !product.manufacturerId) continue;
+
+          const manufacturerId = product.manufacturerId.toString();
+          const manufacturer = await User.findById(manufacturerId);
+          if (!manufacturer) continue;
+
+          if (!manufacturerMap.has(manufacturerId)) {
+            manufacturerMap.set(manufacturerId, {
+              manufacturerId: manufacturer._id,
+              manufacturerName: manufacturer.name,
+              manufacturerEmail: manufacturer.email,
+              items: []
+            });
+          }
+
+          manufacturerMap.get(manufacturerId).items.push({
+            productId: product._id,
+            productName: product.name,
+            quantity: item.quantity,
+            price: item.price,
+            subtotal: item.price * item.quantity
+          });
+        }
+
+        for (const [manufacturerId, data] of manufacturerMap) {
+          const totalAmount = data.items.reduce((sum, item) => sum + item.subtotal, 0);
+          
+          const refund = new Refund({
+            orderId: order._id,
+            orderNumber: order.orderNumber,
+            customerId: customer._id,
+            customerName: customer.name,
+            customerEmail: customer.email,
+            manufacturerId: data.manufacturerId,
+            manufacturerName: data.manufacturerName,
+            manufacturerEmail: data.manufacturerEmail,
+            deliveryPartnerId: order.deliveryPartner?._id || order.deliveryPartner,
+            deliveryPartnerName: order.deliveryPartner?.name,
+            items: data.items,
+            totalAmount: totalAmount,
+            reason: order.returnRequest.reason || 'Product return',
+            refundMethod: 'wallet',
+            status: 'pending',
+            walletAddress: customer.walletAddress || order.paymentDetails?.walletAddress,
+            trackingHistory: [{
+              status: 'pending',
+              message: 'Refund created via emergency fix',
+              timestamp: new Date(),
+              updatedBy: {
+                userId: req.user.userId,
+                name: 'Emergency System',
+                role: 'system'
+              }
+            }]
+          });
+
+          await refund.save();
+
+          console.log(`✅ Created refund for ${order.orderNumber} - ${data.manufacturerName}: ₹${totalAmount}`);
+          
+          results.push({
+            status: 'created',
+            orderNumber: order.orderNumber,
+            manufacturerName: data.manufacturerName,
+            amount: totalAmount,
+            refundId: refund._id
+          });
+        }
+
+      } catch (err) {
+        console.error(`❌ Error processing order ${order.orderNumber}:`, err.message);
+        errors.push({ orderNumber: order.orderNumber, error: err.message });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Processed ${ordersWithRefundRequests.length} orders`,
+      created: results.filter(r => r.status === 'created').length,
+      skipped: results.filter(r => r.status === 'skipped').length,
+      errors: errors.length,
+      results: results,
+      errorDetails: errors
+    });
+
+  } catch (err) {
+    console.error('❌ Emergency refund creation failed:', err);
+    res.status(500).json({ 
+      success: false,
+      message: 'Emergency refund creation failed',
+      error: err.message 
+    });
+  }
+});
 /* ===================== SERVER ===================== */
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {

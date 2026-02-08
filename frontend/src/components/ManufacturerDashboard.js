@@ -1015,7 +1015,7 @@ const fetchRefundStats = useCallback(async () => {
               className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition font-medium ${activeTab === 'marketplace' ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-600 hover:bg-gray-50'}`}
             >
               <ShoppingCart size={20} />
-              <span>Supplier Marketplace</span>
+              <span>SMarketplace</span>
             </button>
             <button 
               onClick={() => setActiveTab('bought')} 
@@ -1052,7 +1052,7 @@ const fetchRefundStats = useCallback(async () => {
               className="w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition font-medium text-gray-600 hover:bg-gray-50 relative group"
             >
               <RefreshCcw size={20} />
-              <span>Refund Management</span>
+              <span>Refund</span>
               {refundStats.pending > 0 && (
                 <span className="absolute right-4 bg-red-500 text-white text-xs px-2 py-1 rounded-full animate-pulse">
                   {refundStats.pending}
