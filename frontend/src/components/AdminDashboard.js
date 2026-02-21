@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { 
-  LayoutDashboard, Users, Package, Settings, LogOut, 
+  LayoutDashboard, Users, LogOut, 
   Search, UserCheck, UserX, 
   Edit2, Trash2, TrendingUp, Shield
 } from 'lucide-react';
@@ -158,9 +158,9 @@ export default function AdminDashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex">
+    <div className="bg-gray-50 flex h-screen overflow-hidden">
       {/* Sidebar */}
-      <div className="w-64 bg-white shadow-lg flex flex-col">
+      <div className="w-64 bg-white shadow-lg flex flex-col h-screen sticky top-0">
         <div className="p-6 border-b border-gray-200">
           <div className="flex items-center space-x-2">
             <Shield className="text-blue-600" size={32} />
@@ -171,7 +171,7 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-        <nav className="p-4 space-y-2 flex-1">
+        <nav className="p-4 space-y-2 flex-grow overflow-y-auto">
           <button
             onClick={() => setActiveTab('dashboard')}
             className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition ${
@@ -192,25 +192,7 @@ export default function AdminDashboard() {
             <span className="font-medium">Users</span>
           </button>
 
-          <button
-            onClick={() => setActiveTab('products')}
-            className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition ${
-              activeTab === 'products' ? 'bg-blue-50 text-blue-600' : 'text-gray-700 hover:bg-gray-50'
-            }`}
-          >
-            <Package size={20} />
-            <span className="font-medium">Products</span>
-          </button>
 
-          <button
-            onClick={() => setActiveTab('settings')}
-            className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition ${
-              activeTab === 'settings' ? 'bg-blue-50 text-blue-600' : 'text-gray-700 hover:bg-gray-50'
-            }`}
-          >
-            <Settings size={20} />
-            <span className="font-medium">Settings</span>
-          </button>
         </nav>
 
         <div className="p-4 border-t border-gray-200">
@@ -377,12 +359,7 @@ export default function AdminDashboard() {
             </div>
           )}
 
-          {activeTab === 'products' && (
-            <div className="bg-white p-12 rounded-xl shadow-sm border text-center">
-              <Package className="mx-auto text-gray-400 mb-4" size={64} />
-              <p className="text-gray-600">Product management features coming soon.</p>
-            </div>
-          )}
+
         </div>
       </div>
 

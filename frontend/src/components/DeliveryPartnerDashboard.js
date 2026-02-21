@@ -7,7 +7,8 @@ import {
   Eye, EyeOff, Shield, RotateCcw, FileText, Check, X,
   ThumbsUp, ThumbsDown, Calendar, DollarSign, Loader2,
   ShieldCheck, Mail, MessageSquare, PhoneCall, ExternalLink,
-  DollarSign as DollarSignIcon, Key as KeyIcon, Lock as LockIcon
+  DollarSign as DollarSignIcon, Key as KeyIcon, Lock as LockIcon, XCircle,
+  CreditCard, Banknote, Wallet, CheckSquare, AlertTriangle
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -262,19 +263,60 @@ export default function DeliveryPartnerDashboard() {
     }
   };
 
-const updateOrderStatus = async (orderId, newStatus) => {
-  try {
-    const currentToken = getToken();
-    if (!currentToken) {
-      alert('Session expired. Please login again.');
-      handleLogout();
-      return;
-    }
+  const updateOrderStatus = async (orderId, newStatus) => {
+    try {
+      const currentToken = getToken();
+      if (!currentToken) {
+        alert('Session expired. Please login again.');
+        handleLogout();
+        return;
+      }
 
-    // Special handling for return pickup status updates
-    if (['out_for_pickup', 'pickup_near_location', 'pickup_completed', 'refund_requested'].includes(newStatus)) {
-      // For return pickup flows, use the return-status endpoint instead
-      const response = await fetch(`${API_URL}/delivery/orders/${orderId}/return-status`, {
+      // Special handling for return pickup status updates
+      if (['out_for_pickup', 'pickup_near_location', 'pickup_completed', 'refund_requested'].includes(newStatus)) {
+        // For return pickup flows, use the return-status endpoint instead
+        const response = await fetch(`${API_URL}/delivery/orders/${orderId}/return-status`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${currentToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ status: newStatus })
+        });
+
+        const data = await response.json();
+        
+        if (!response.ok) {
+          console.error('Error response:', data);
+          if (response.status === 403) {
+            alert('Access denied. Please login again.');
+            handleLogout();
+            return;
+          }
+          throw new Error(data.message || 'Failed to update return status');
+        }
+
+        alert(`Return status updated to: ${newStatus.replace(/_/g, ' ')}`);
+        
+        fetchAssignments();
+        fetchReturnRequests();
+        fetchStats();
+        
+        if (selectedOrder && selectedOrder._id === orderId) {
+          setSelectedOrder(prev => ({ 
+            ...prev, 
+            status: newStatus,
+            returnRequest: {
+              ...prev.returnRequest,
+              status: newStatus
+            }
+          }));
+        }
+        return;
+      }
+
+      // For regular delivery status updates, use the original endpoint
+      const response = await fetch(`${API_URL}/delivery/orders/${orderId}/status`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${currentToken}`,
@@ -292,68 +334,27 @@ const updateOrderStatus = async (orderId, newStatus) => {
           handleLogout();
           return;
         }
-        throw new Error(data.message || 'Failed to update return status');
+        throw new Error(data.message || 'Failed to update status');
       }
 
-      alert(`Return status updated to: ${newStatus.replace(/_/g, ' ')}`);
+      alert(`Order status updated to: ${newStatus.replace(/_/g, ' ')}`);
       
       fetchAssignments();
-      fetchReturnRequests();
       fetchStats();
       
-      if (selectedOrder && selectedOrder._id === orderId) {
-        setSelectedOrder(prev => ({ 
-          ...prev, 
-          status: newStatus,
-          returnRequest: {
-            ...prev.returnRequest,
-            status: newStatus
-          }
-        }));
+      if (newStatus === 'near_location' && selectedOrder && selectedOrder._id === orderId) {
+        setSelectedOrder(prev => ({ ...prev, status: 'near_location' }));
       }
-      return;
-    }
 
-    // For regular delivery status updates, use the original endpoint
-    const response = await fetch(`${API_URL}/delivery/orders/${orderId}/status`, {
-      method: 'PUT',
-      headers: {
-        'Authorization': `Bearer ${currentToken}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ status: newStatus })
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      console.error('Error response:', data);
-      if (response.status === 403) {
-        alert('Access denied. Please login again.');
-        handleLogout();
-        return;
+    } catch (error) {
+      console.error('Update status error:', error);
+      if (error.message.includes('Invalid status transition')) {
+        alert(`Cannot update status: ${error.message}\n\nPlease check the current order status and try the appropriate action.`);
+      } else {
+        alert(`Failed to update order status: ${error.message}`);
       }
-      throw new Error(data.message || 'Failed to update status');
     }
-
-    alert(`Order status updated to: ${newStatus.replace(/_/g, ' ')}`);
-    
-    fetchAssignments();
-    fetchStats();
-    
-    if (newStatus === 'near_location' && selectedOrder && selectedOrder._id === orderId) {
-      setSelectedOrder(prev => ({ ...prev, status: 'near_location' }));
-    }
-
-  } catch (error) {
-    console.error('Update status error:', error);
-    if (error.message.includes('Invalid status transition')) {
-      alert(`Cannot update status: ${error.message}\n\nPlease check the current order status and try the appropriate action.`);
-    } else {
-      alert(`Failed to update order status: ${error.message}`);
-    }
-  }
-};
+  };
 
   const generateOTPForOrder = async (orderId) => {
     try {
@@ -697,6 +698,68 @@ const updateOrderStatus = async (orderId, newStatus) => {
     }
   };
 
+  // NEW FUNCTION: Manually refresh return/refund status
+  const refreshOrderRefundStatus = async (orderId) => {
+    try {
+      const currentToken = getToken();
+      const response = await fetch(`${API_URL}/delivery/orders/${orderId}/refund-status`, {
+        headers: {
+          'Authorization': `Bearer ${currentToken}`
+        }
+      });
+
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.message || 'Failed to fetch refund status');
+      }
+
+      // Update the selected order with fresh refund status
+      if (selectedOrder && selectedOrder._id === orderId) {
+        setSelectedOrder(prev => ({
+          ...prev,
+          refundStatus: data.refundStatus,
+          returnRequest: {
+            ...prev.returnRequest,
+            refundStatus: data.refundStatus,
+            refundDetails: data.refundDetails
+          }
+        }));
+      }
+
+      // Also update in assignments list
+      setAssignments(prev => prev.map(order => 
+        order._id === orderId ? {
+          ...order,
+          refundStatus: data.refundStatus,
+          returnRequest: {
+            ...order.returnRequest,
+            refundStatus: data.refundStatus,
+            refundDetails: data.refundDetails
+          }
+        } : order
+      ));
+
+      // Update in return requests list
+      setReturnRequests(prev => prev.map(order => 
+        order._id === orderId ? {
+          ...order,
+          refundStatus: data.refundStatus,
+          returnRequest: {
+            ...order.returnRequest,
+            refundStatus: data.refundStatus,
+            refundDetails: data.refundDetails
+          }
+        } : order
+      ));
+
+      return data;
+    } catch (error) {
+      console.error('Error fetching refund status:', error);
+      return null;
+    }
+  };
+
   const getStatusColor = (status) => {
     const colors = {
       pending: 'bg-yellow-100 text-yellow-800',
@@ -712,7 +775,11 @@ const updateOrderStatus = async (orderId, newStatus) => {
       pickup_near_location: 'bg-orange-100 text-orange-800',
       pickup_otp_generated: 'bg-purple-100 text-purple-800',
       pickup_completed: 'bg-green-100 text-green-800',
-      refund_requested: 'bg-red-100 text-red-800'
+      refund_requested: 'bg-blue-100 text-blue-800',
+      refund_processing: 'bg-indigo-100 text-indigo-800',
+      refund_completed: 'bg-green-100 text-green-800',
+      refund_rejected: 'bg-red-100 text-red-800',
+      refund_failed: 'bg-red-100 text-red-800'
     };
     return colors[status] || 'bg-gray-100 text-gray-800';
   };
@@ -726,10 +793,11 @@ const updateOrderStatus = async (orderId, newStatus) => {
       pickup_near_location: 'bg-orange-100 text-orange-800',
       pickup_otp_generated: 'bg-purple-100 text-purple-800',
       pickup_completed: 'bg-green-100 text-green-800',
-      refund_requested: 'bg-red-100 text-red-800',
-      refund_approved: 'bg-green-100 text-green-800',
-      refund_processing: 'bg-blue-100 text-blue-800',
-      refund_completed: 'bg-green-100 text-green-800'
+      refund_requested: 'bg-blue-100 text-blue-800',
+      refund_processing: 'bg-indigo-100 text-indigo-800',
+      refund_completed: 'bg-green-100 text-green-800',
+      refund_rejected: 'bg-red-100 text-red-800',
+      refund_failed: 'bg-red-100 text-red-800'
     };
     return colors[status] || 'bg-gray-100 text-gray-800';
   };
@@ -754,7 +822,7 @@ const updateOrderStatus = async (orderId, newStatus) => {
     );
   };
 
-  const getStatusSteps = (currentStatus, isReturn = false) => {
+  const getStatusSteps = (currentStatus, isReturn = false, order = null) => {
     if (isReturn) {
       const steps = [
         { status: 'return_requested', label: 'Return Requested', icon: RotateCcw },
@@ -766,11 +834,45 @@ const updateOrderStatus = async (orderId, newStatus) => {
         { status: 'refund_requested', label: 'Refund Requested', icon: DollarSignIcon }
       ];
       
-      return steps.map(step => {
+      // Add refund status steps if refund exists
+      const refundStatus = order?.refundStatus || order?.returnRequest?.refundStatus;
+      
+      if (refundStatus) {
+        // Add refund tracking steps
+        steps.push({ 
+          status: 'refund_pending', 
+          label: 'Refund Pending', 
+          icon: Clock,
+          refundStep: true 
+        });
+        
+        if (['processing', 'completed', 'rejected', 'failed'].includes(refundStatus)) {
+          steps.push({ 
+            status: `refund_${refundStatus}`, 
+            label: `Refund ${refundStatus.charAt(0).toUpperCase() + refundStatus.slice(1)}`, 
+            icon: refundStatus === 'completed' ? CheckSquare : 
+                  refundStatus === 'processing' ? Loader2 : 
+                  refundStatus === 'rejected' ? XCircle :
+                  AlertTriangle,
+            refundStep: true 
+          });
+        }
+      }
+      
+      return steps.map((step, index) => {
+        // Handle refund-specific steps
+        if (step.refundStep) {
+          const isActive = step.status === `refund_${refundStatus}`;
+          const isCompleted = false; // Refund steps show current status, not completion
+          
+          return { ...step, isActive, isCompleted };
+        }
+        
+        // Regular status steps
         const isActive = step.status === currentStatus;
-        const isCompleted = 
-          steps.findIndex(s => s.status === currentStatus) > 
-          steps.findIndex(s => s.status === step.status);
+        const currentIndex = steps.findIndex(s => s.status === currentStatus);
+        const stepIndex = steps.findIndex(s => s.status === step.status);
+        const isCompleted = currentIndex > stepIndex;
         
         return { ...step, isActive, isCompleted };
       });
@@ -830,13 +932,22 @@ const updateOrderStatus = async (orderId, newStatus) => {
     }
   };
 
-  const viewOrderDetails = (order) => {
+  const viewOrderDetails = async (order) => {
     setSelectedOrder(order);
     setViewMode('detail');
+    
+    // Also fetch the latest refund status when viewing details
+    if (order._id && (order.returnRequest?.status === 'refund_requested' || order.returnRequest?.refundStatus === 'processing')) {
+      await refreshOrderRefundStatus(order._id);
+    }
   };
 
-  const viewReturnDetails = (request) => {
+  const viewReturnDetails = async (request) => {
     setSelectedReturnRequest(request);
+    // Fetch latest refund status when viewing return details
+    if (request._id) {
+      await refreshOrderRefundStatus(request._id);
+    }
     setShowReturnDetailsModal(true);
   };
 
@@ -864,6 +975,14 @@ const updateOrderStatus = async (orderId, newStatus) => {
     } catch (error) {
       return 'Invalid Date';
     }
+  };
+
+  const formatCurrency = (amount) => {
+    return new Intl.NumberFormat('en-IN', {
+      style: 'currency',
+      currency: 'INR',
+      minimumFractionDigits: 2
+    }).format(amount);
   };
 
   if (loading) {
@@ -1029,6 +1148,7 @@ const updateOrderStatus = async (orderId, newStatus) => {
                         order={assignment}
                         getStatusBadge={getStatusBadge}
                         viewOrderDetails={viewOrderDetails}
+                        refreshOrderRefundStatus={refreshOrderRefundStatus}
                       />
                     ))}
                   </div>
@@ -1125,7 +1245,9 @@ const updateOrderStatus = async (orderId, newStatus) => {
                   </div>
                 ) : (
                   <div className="grid gap-6">
-                    {returnRequests.map((request) => (
+                    {returnRequests.map((request) => {
+                      const refundStatus = request.refundStatus || request.returnRequest?.refundStatus;
+                      return (
                       <div key={request._id} className="bg-white rounded-2xl shadow-sm overflow-hidden">
                         <div className="p-6">
                           {/* Request Header */}
@@ -1135,7 +1257,17 @@ const updateOrderStatus = async (orderId, newStatus) => {
                                 <h3 className="text-lg font-bold text-gray-900">
                                   Order #{request.orderNumber}
                                 </h3>
-                                {request.returnRequest?.status && (
+                                {refundStatus ? (
+                                  <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                                    refundStatus === 'completed' ? 'bg-green-100 text-green-800' :
+                                    refundStatus === 'processing' ? 'bg-indigo-100 text-indigo-800' :
+                                    refundStatus === 'rejected' ? 'bg-red-100 text-red-800' :
+                                    refundStatus === 'failed' ? 'bg-red-100 text-red-800' :
+                                    'bg-blue-100 text-blue-800'
+                                  }`}>
+                                    REFUND {refundStatus.toUpperCase()}
+                                  </span>
+                                ) : request.returnRequest?.status && (
                                   <span className={`px-3 py-1 rounded-full text-xs font-semibold ${getReturnStatusColor(request.returnRequest.status)}`}>
                                     {request.returnRequest.status.replace(/_/g, ' ').toUpperCase()}
                                   </span>
@@ -1148,6 +1280,11 @@ const updateOrderStatus = async (orderId, newStatus) => {
                             <div className="text-right">
                               <p className="text-sm font-semibold text-gray-900">Refund Amount</p>
                               <p className="text-2xl font-bold text-red-600">₹{request.totalAmount?.toLocaleString() || '0'}</p>
+                              {refundStatus === 'completed' && request.returnRequest?.refundDetails?.processedAt && (
+                                <p className="text-xs text-green-600">
+                                  Completed: {new Date(request.returnRequest.refundDetails.processedAt).toLocaleDateString()}
+                                </p>
+                              )}
                             </div>
                           </div>
 
@@ -1166,6 +1303,36 @@ const updateOrderStatus = async (orderId, newStatus) => {
                               <p className="text-sm text-gray-600 mt-2">
                                 <strong>Reason:</strong> {request.returnRequest?.reason || 'N/A'}
                               </p>
+                              {refundStatus && (
+                                <div className={`mt-3 p-2 rounded-lg ${
+                                  refundStatus === 'completed' ? 'bg-green-50 border border-green-200' :
+                                  refundStatus === 'processing' ? 'bg-blue-50 border border-blue-200' :
+                                  refundStatus === 'rejected' ? 'bg-red-50 border border-red-200' :
+                                  'bg-yellow-50 border border-yellow-200'
+                                }`}>
+                                  <p className="text-xs font-semibold">
+                                    Refund Status: <span className={
+                                      refundStatus === 'completed' ? 'text-green-700' :
+                                      refundStatus === 'processing' ? 'text-blue-700' :
+                                      refundStatus === 'rejected' ? 'text-red-700' :
+                                      'text-yellow-700'
+                                    }>{refundStatus.toUpperCase()}</span>
+                                  </p>
+                                  {request.returnRequest?.refundDetails?.transactionId && (
+                                    <p className="text-xs mt-1">Transaction: {request.returnRequest.refundDetails.transactionId.slice(0, 10)}...</p>
+                                  )}
+                                  {/* Refresh Button for Refund Status */}
+                                  {refundStatus && refundStatus !== 'completed' && (
+                                    <button
+                                      onClick={() => refreshOrderRefundStatus(request._id)}
+                                      className="mt-2 text-xs px-2 py-1 bg-white hover:bg-gray-100 border border-gray-300 rounded flex items-center"
+                                    >
+                                      <RefreshCw size={10} className="mr-1" />
+                                      Check Status
+                                    </button>
+                                  )}
+                                </div>
+                              )}
                             </div>
 
                             <div className="bg-gray-50 p-4 rounded-lg">
@@ -1212,7 +1379,7 @@ const updateOrderStatus = async (orderId, newStatus) => {
                               className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition flex items-center"
                             >
                               <Eye size={18} className="mr-2" />
-                              View Details & Process
+                              View Details
                             </button>
                             <a
                               href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
@@ -1225,10 +1392,28 @@ const updateOrderStatus = async (orderId, newStatus) => {
                               <Navigation size={18} className="mr-2" />
                               Navigate
                             </a>
+                            {refundStatus === 'completed' && (
+                              <button
+                                className="px-6 py-3 bg-green-600 text-white rounded-lg flex items-center"
+                                disabled
+                              >
+                                <CheckSquare size={18} className="mr-2" />
+                                Refund Completed
+                              </button>
+                            )}
+                            {refundStatus && refundStatus !== 'completed' && (
+                              <button
+                                onClick={() => refreshOrderRefundStatus(request._id)}
+                                className="px-4 py-3 bg-yellow-100 text-yellow-800 hover:bg-yellow-200 rounded-lg transition flex items-center text-sm"
+                              >
+                                <RefreshCw size={14} className="mr-2" />
+                                Refresh Status
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
-                    ))}
+                    )})}
                   </div>
                 )}
               </div>
@@ -1252,6 +1437,8 @@ const updateOrderStatus = async (orderId, newStatus) => {
             otpSentTo={otpSentTo}
             setShowReturnModal={setShowReturnModal}
             formatDate={formatDate}
+            formatCurrency={formatCurrency}
+            refreshOrderRefundStatus={refreshOrderRefundStatus}
           />
         )}
       </div>
@@ -1691,32 +1878,103 @@ const updateOrderStatus = async (orderId, newStatus) => {
               </div>
             </div>
 
+            {/* Refund Status Section */}
+            {selectedReturnRequest.returnRequest?.refundStatus && (
+              <div className="mb-6 p-6 bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-xl">
+                <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
+                  <DollarSign size={20} className="mr-2 text-blue-600" />
+                  Refund Status
+                </h3>
+                <div className="grid md:grid-cols-2 gap-6">
+                  <div className="bg-white/60 p-4 rounded-lg">
+                    <p className="text-sm text-blue-800 mb-1">Status</p>
+                    <div className="flex items-center">
+                      <div className={`w-3 h-3 rounded-full mr-2 ${
+                        selectedReturnRequest.returnRequest.refundStatus === 'completed' ? 'bg-green-500 animate-pulse' :
+                        selectedReturnRequest.returnRequest.refundStatus === 'processing' ? 'bg-blue-500 animate-pulse' :
+                        selectedReturnRequest.returnRequest.refundStatus === 'rejected' ? 'bg-red-500' :
+                        'bg-yellow-500'
+                      }`}></div>
+                      <p className={`font-semibold ${
+                        selectedReturnRequest.returnRequest.refundStatus === 'completed' ? 'text-green-700' :
+                        selectedReturnRequest.returnRequest.refundStatus === 'processing' ? 'text-blue-700' :
+                        selectedReturnRequest.returnRequest.refundStatus === 'rejected' ? 'text-red-700' :
+                        'text-yellow-700'
+                      }`}>
+                        {selectedReturnRequest.returnRequest.refundStatus.toUpperCase()}
+                      </p>
+                    </div>
+                  </div>
+                  {selectedReturnRequest.returnRequest.refundDetails?.amount && (
+                    <div className="bg-white/60 p-4 rounded-lg">
+                      <p className="text-sm text-blue-800 mb-1">Refund Amount</p>
+                      <p className="text-xl font-bold text-blue-900">
+                        ₹{selectedReturnRequest.returnRequest.refundDetails.amount.toLocaleString()}
+                      </p>
+                    </div>
+                  )}
+                  {selectedReturnRequest.returnRequest.refundDetails?.transactionId && (
+                    <div className="bg-white/60 p-4 rounded-lg col-span-2">
+                      <p className="text-sm text-blue-800 mb-1">Transaction ID</p>
+                      <p className="text-sm font-mono text-blue-900 break-all">
+                        {selectedReturnRequest.returnRequest.refundDetails.transactionId}
+                      </p>
+                    </div>
+                  )}
+                  {selectedReturnRequest.returnRequest.refundDetails?.processedAt && (
+                    <div className="bg-white/60 p-4 rounded-lg">
+                      <p className="text-sm text-blue-800 mb-1">Processed On</p>
+                      <p className="text-sm font-semibold text-blue-900">
+                        {formatDate(selectedReturnRequest.returnRequest.refundDetails.processedAt)}
+                      </p>
+                    </div>
+                  )}
+                  <div className="col-span-2">
+                    <button
+                      onClick={() => {
+                        refreshOrderRefundStatus(selectedReturnRequest._id);
+                        setShowReturnDetailsModal(false);
+                      }}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition flex items-center text-sm"
+                    >
+                      <RefreshCw size={14} className="mr-2" />
+                      Refresh Refund Status
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Action Buttons */}
             <div className="flex flex-wrap gap-3">
-              <button
-                onClick={() => {
-                  setSelectedReturnRequest(selectedReturnRequest);
-                  setReturnAction('approve');
-                  setShowReturnDetailsModal(false);
-                  setShowReturnActionModal(true);
-                }}
-                className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition flex items-center"
-              >
-                <ThumbsUp size={18} className="mr-2" />
-                Approve Return
-              </button>
-              <button
-                onClick={() => {
-                  setSelectedReturnRequest(selectedReturnRequest);
-                  setReturnAction('reject');
-                  setShowReturnDetailsModal(false);
-                  setShowReturnActionModal(true);
-                }}
-                className="px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition flex items-center"
-              >
-                <ThumbsDown size={18} className="mr-2" />
-                Reject Return
-              </button>
+              {!selectedReturnRequest.returnRequest?.refundStatus && (
+                <>
+                  <button
+                    onClick={() => {
+                      setSelectedReturnRequest(selectedReturnRequest);
+                      setReturnAction('approve');
+                      setShowReturnDetailsModal(false);
+                      setShowReturnActionModal(true);
+                    }}
+                    className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition flex items-center"
+                  >
+                    <ThumbsUp size={18} className="mr-2" />
+                    Approve Return
+                  </button>
+                  <button
+                    onClick={() => {
+                      setSelectedReturnRequest(selectedReturnRequest);
+                      setReturnAction('reject');
+                      setShowReturnDetailsModal(false);
+                      setShowReturnActionModal(true);
+                    }}
+                    className="px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition flex items-center"
+                  >
+                    <ThumbsDown size={18} className="mr-2" />
+                    Reject Return
+                  </button>
+                </>
+              )}
               <a
                 href={`tel:${selectedReturnRequest.deliveryAddress?.phone || ''}`}
                 className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition flex items-center"
@@ -1735,6 +1993,15 @@ const updateOrderStatus = async (orderId, newStatus) => {
                 <Navigation size={18} className="mr-2" />
                 View on Map
               </a>
+              {selectedReturnRequest.returnRequest?.refundStatus && selectedReturnRequest.returnRequest.refundStatus !== 'completed' && (
+                <button
+                  onClick={() => refreshOrderRefundStatus(selectedReturnRequest._id)}
+                  className="px-6 py-3 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition flex items-center"
+                >
+                  <RefreshCw size={18} className="mr-2" />
+                  Check Refund Status
+                </button>
+              )}
               <button
                 onClick={() => setShowReturnDetailsModal(false)}
                 className="px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition ml-auto"
@@ -1846,20 +2113,43 @@ const updateOrderStatus = async (orderId, newStatus) => {
   );
 }
 
-function OrderCard({ order, getStatusBadge, viewOrderDetails }) {
+function OrderCard({ order, getStatusBadge, viewOrderDetails, refreshOrderRefundStatus }) {
   const totalItems = order.items?.reduce((sum, item) => sum + item.quantity, 0) || 0;
+  const isReturnFlow = order.status === 'return_requested' || 
+                      order.returnRequest?.status === 'approved' ||
+                      ['out_for_pickup', 'pickup_near_location', 'pickup_otp_generated', 'pickup_completed', 'refund_requested'].includes(order.status);
+  const refundStatus = order.refundStatus || order.returnRequest?.refundStatus;
+
+  const handleViewDetails = async () => {
+    viewOrderDetails(order);
+    // Also refresh refund status if it's in progress
+    if (refundStatus && refundStatus !== 'completed') {
+      await refreshOrderRefundStatus(order._id);
+    }
+  };
 
   return (
     <div 
       className="bg-white rounded-xl shadow-sm hover:shadow-md transition-shadow cursor-pointer border border-gray-200"
-      onClick={() => viewOrderDetails(order)}
+      onClick={handleViewDetails}
     >
       <div className="p-4">
         <div className="flex items-start justify-between">
           <div className="flex-1">
             <div className="flex items-center justify-between mb-2">
               <h3 className="font-bold text-gray-900">Order #{order.orderNumber}</h3>
-              {getStatusBadge(order.status)}
+              <div className="flex items-center space-x-2">
+                {refundStatus && (
+                  <span className={`px-2 py-1 rounded-full text-xs font-semibold ${
+                    refundStatus === 'completed' ? 'bg-green-100 text-green-800' :
+                    refundStatus === 'processing' ? 'bg-blue-100 text-blue-800' :
+                    'bg-yellow-100 text-yellow-800'
+                  }`}>
+                    {refundStatus.toUpperCase()}
+                  </span>
+                )}
+                {getStatusBadge(order.status)}
+              </div>
             </div>
             
             <div className="grid grid-cols-2 gap-4 mb-3">
@@ -1919,17 +2209,21 @@ function OrderDetailView({
   setShowRefundRequestModal,
   otpSentTo,
   setShowReturnModal,
-  formatDate
+  formatDate,
+  formatCurrency,
+  refreshOrderRefundStatus
 }) {
   const isReturnFlow = order.status === 'return_requested' || 
                       order.returnRequest?.status === 'approved' ||
                       ['out_for_pickup', 'pickup_near_location', 'pickup_otp_generated', 'pickup_completed', 'refund_requested'].includes(order.status);
   
-  const steps = getStatusSteps(isReturnFlow ? order.returnRequest?.status || order.status : order.status, isReturnFlow);
+  const steps = getStatusSteps(isReturnFlow ? order.returnRequest?.status || order.status : order.status, isReturnFlow, order);
   const hasOTPGenerated = order.deliveryOTP || order.otpGenerated;
   const hasPickupOTPGenerated = order.returnRequest?.pickupOTP || order.pickupOTP;
   const isReturnRequested = order.status === 'return_requested';
   const returnStatus = order.returnRequest?.status;
+  const refundStatus = order.refundStatus || order.returnRequest?.refundStatus;
+  const refundDetails = order.returnRequest?.refundDetails;
 
   const handleStartDelivery = () => {
     if (window.confirm('Are you ready to start delivery?')) {
@@ -1943,108 +2237,128 @@ function OrderDetailView({
     }
   };
 
-const getAvailableActions = () => {
-  const actions = [];
-  
-  // Delivery Actions
-  if (order.status === 'confirmed') {
-    actions.push({
-      label: 'Start Delivery',
-      onClick: handleStartDelivery,
-      color: 'bg-blue-600 hover:bg-blue-700',
-      icon: Truck,
-      description: 'Begin delivery process'
-    });
-  }
-  
-  if (order.status === 'out_for_delivery') {
-    actions.push({
-      label: 'Near Location',
-      onClick: handleNearLocation,
-      color: 'bg-orange-600 hover:bg-orange-700',
-      icon: MapPin,
-      description: 'Update location status'
-    });
-  }
-  
-  if (order.status === 'near_location') {
-    if (!hasOTPGenerated) {
+  const handleRefreshRefundStatus = async () => {
+    if (!order._id) return;
+    
+    const data = await refreshOrderRefundStatus(order._id);
+    if (data) {
+      alert(`Refund status refreshed: ${data.refundStatus || 'No update'}`);
+    }
+  };
+
+  const getAvailableActions = () => {
+    const actions = [];
+    
+    // Delivery Actions
+    if (order.status === 'confirmed') {
       actions.push({
-        label: 'Generate OTP',
-        onClick: () => setShowGenerateOTPModal(true),
-        color: 'bg-purple-600 hover:bg-purple-700',
-        icon: Key,
-        description: 'Generate OTP for customer verification'
+        label: 'Start Delivery',
+        onClick: handleStartDelivery,
+        color: 'bg-blue-600 hover:bg-blue-700',
+        icon: Truck,
+        description: 'Begin delivery process'
       });
     }
     
-    if (hasOTPGenerated) {
+    if (order.status === 'out_for_delivery') {
       actions.push({
-        label: 'Verify OTP & Deliver',
-        onClick: () => setShowVerifyOTPModal(true),
-        color: 'bg-green-600 hover:bg-green-700',
-        icon: Lock,
-        description: 'Verify OTP to complete delivery'
-      });
-    }
-  }
-
-  // Return Pickup Actions - FIXED
-  // Check if return request is approved (not order status)
-  if (order.returnRequest?.status === 'approved' && order.returnRequest?.requested === true) {
-    actions.push({
-      label: 'Out for Pickup',
-      onClick: () => updateOrderStatus(order._id, 'out_for_pickup'),
-      color: 'bg-blue-600 hover:bg-blue-700',
-      icon: Truck,
-      description: 'Start pickup process'
-    });
-  }
-  
-  if (order.returnRequest?.status === 'out_for_pickup' || order.status === 'out_for_pickup') {
-    actions.push({
-      label: 'Near Pickup Location',
-      onClick: () => updateOrderStatus(order._id, 'pickup_near_location'),
-      color: 'bg-orange-600 hover:bg-orange-700',
-      icon: MapPin,
-      description: 'Update pickup location status'
-    });
-  }
-  
-  if (order.returnRequest?.status === 'pickup_near_location' || order.status === 'pickup_near_location') {
-    if (!hasPickupOTPGenerated) {
-      actions.push({
-        label: 'Generate Pickup OTP',
-        onClick: () => generatePickupOTPForOrder(order._id),
-        color: 'bg-purple-600 hover:bg-purple-700',
-        icon: Key,
-        description: 'Generate OTP for pickup verification'
+        label: 'Near Location',
+        onClick: handleNearLocation,
+        color: 'bg-orange-600 hover:bg-orange-700',
+        icon: MapPin,
+        description: 'Update location status'
       });
     }
     
-    if (hasPickupOTPGenerated) {
+    if (order.status === 'near_location') {
+      if (!hasOTPGenerated) {
+        actions.push({
+          label: 'Generate OTP',
+          onClick: () => setShowGenerateOTPModal(true),
+          color: 'bg-purple-600 hover:bg-purple-700',
+          icon: Key,
+          description: 'Generate OTP for customer verification'
+        });
+      }
+      
+      if (hasOTPGenerated) {
+        actions.push({
+          label: 'Verify OTP & Deliver',
+          onClick: () => setShowVerifyOTPModal(true),
+          color: 'bg-green-600 hover:bg-green-700',
+          icon: Lock,
+          description: 'Verify OTP to complete delivery'
+        });
+      }
+    }
+
+    // Return Pickup Actions - FIXED
+    // Check if return request is approved (not order status)
+    if (order.returnRequest?.status === 'approved' && order.returnRequest?.requested === true) {
       actions.push({
-        label: 'Verify Pickup OTP',
-        onClick: () => setShowVerifyPickupOTPModal(true),
-        color: 'bg-green-600 hover:bg-green-700',
-        icon: Lock,
-        description: 'Verify pickup OTP'
+        label: 'Out for Pickup',
+        onClick: () => updateOrderStatus(order._id, 'out_for_pickup'),
+        color: 'bg-blue-600 hover:bg-blue-700',
+        icon: Truck,
+        description: 'Start pickup process'
       });
     }
-  }
-  
-  if (order.returnRequest?.status === 'pickup_completed' || order.status === 'pickup_completed') {
-    actions.push({
-      label: 'Request Refund',
-      onClick: () => setShowRefundRequestModal(true),
-      color: 'bg-red-600 hover:bg-red-700',
-      icon: DollarSign,
-      description: 'Request refund from manufacturer'
-    });
-  }
+    
+    if (order.returnRequest?.status === 'out_for_pickup' || order.status === 'out_for_pickup') {
+      actions.push({
+        label: 'Near Pickup Location',
+        onClick: () => updateOrderStatus(order._id, 'pickup_near_location'),
+        color: 'bg-orange-600 hover:bg-orange-700',
+        icon: MapPin,
+        description: 'Update pickup location status'
+      });
+    }
+    
+    if (order.returnRequest?.status === 'pickup_near_location' || order.status === 'pickup_near_location') {
+      if (!hasPickupOTPGenerated) {
+        actions.push({
+          label: 'Generate Pickup OTP',
+          onClick: () => generatePickupOTPForOrder(order._id),
+          color: 'bg-purple-600 hover:bg-purple-700',
+          icon: Key,
+          description: 'Generate OTP for pickup verification'
+        });
+      }
+      
+      if (hasPickupOTPGenerated) {
+        actions.push({
+          label: 'Verify Pickup OTP',
+          onClick: () => setShowVerifyPickupOTPModal(true),
+          color: 'bg-green-600 hover:bg-green-700',
+          icon: Lock,
+          description: 'Verify pickup OTP'
+        });
+      }
+    }
+    
+    if (order.returnRequest?.status === 'pickup_completed' || order.status === 'pickup_completed') {
+      actions.push({
+        label: 'Request Refund',
+        onClick: () => setShowRefundRequestModal(true),
+        color: 'bg-red-600 hover:bg-red-700',
+        icon: DollarSign,
+        description: 'Request refund from manufacturer'
+      });
+    }
 
-  return actions;
-};
+    // Refund Status Check Action
+    if (refundStatus && refundStatus !== 'completed') {
+      actions.push({
+        label: 'Check Refund Status',
+        onClick: handleRefreshRefundStatus,
+        color: 'bg-yellow-600 hover:bg-yellow-700',
+        icon: RefreshCw,
+        description: 'Refresh refund status from manufacturer'
+      });
+    }
+
+    return actions;
+  };
 
   return (
     <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
@@ -2072,7 +2386,19 @@ const getAvailableActions = () => {
               </p>
             </div>
           </div>
-          {getStatusBadge(order.status)}
+          <div className="flex items-center space-x-2">
+            {refundStatus && (
+              <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                refundStatus === 'completed' ? 'bg-green-100 text-green-800' :
+                refundStatus === 'processing' ? 'bg-blue-100 text-blue-800' :
+                refundStatus === 'rejected' ? 'bg-red-100 text-red-800' :
+                'bg-yellow-100 text-yellow-800'
+              }`}>
+                REFUND {refundStatus.toUpperCase()}
+              </span>
+            )}
+            {getStatusBadge(order.status)}
+          </div>
         </div>
       </div>
 
@@ -2090,6 +2416,104 @@ const getAvailableActions = () => {
                   <> | <strong> Pickup:</strong> {order.returnRequest.pickupSchedule.date} {order.returnRequest.pickupSchedule.time}</>
                 )}
               </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Refund Completed Banner */}
+      {refundStatus === 'completed' && refundDetails && (
+        <div className="p-6 border-b border-gray-200">
+          <div className="bg-gradient-to-r from-green-50 to-emerald-50 border-2 border-green-200 rounded-xl p-6">
+            <div className="flex items-start space-x-4">
+              <div className="w-12 h-12 bg-green-500 rounded-full flex items-center justify-center flex-shrink-0">
+                <CheckSquare size={28} className="text-white" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-xl font-bold text-green-900 mb-2 flex items-center">
+                  Refund Successfully Completed!
+                </h3>
+                <div className="grid md:grid-cols-2 gap-4 mt-4">
+                  <div className="bg-white/60 p-3 rounded-lg">
+                    <p className="text-sm text-green-800 mb-1">Refund Amount</p>
+                    <p className="text-2xl font-bold text-green-900">
+                      ₹{refundDetails.amount?.toLocaleString() || order.totalAmount?.toLocaleString() || '0'}
+                    </p>
+                  </div>
+                  {refundDetails.transactionId && (
+                    <div className="bg-white/60 p-3 rounded-lg">
+                      <p className="text-sm text-green-800 mb-1">Transaction ID</p>
+                      <p className="text-sm font-mono font-semibold text-green-900 break-all">
+                        {refundDetails.transactionId}
+                      </p>
+                    </div>
+                  )}
+                  {refundDetails.processedAt && (
+                    <div className="bg-white/60 p-3 rounded-lg">
+                      <p className="text-sm text-green-800 mb-1">Processed On</p>
+                      <p className="text-sm font-semibold text-green-900">
+                        {formatDate(refundDetails.processedAt)}
+                      </p>
+                    </div>
+                  )}
+                  <div className="bg-white/60 p-3 rounded-lg">
+                    <p className="text-sm text-green-800 mb-1">Status</p>
+                    <div className="flex items-center">
+                      <div className="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></div>
+                      <p className="text-sm font-semibold text-green-900">Completed</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-4 p-3 bg-green-100 border border-green-300 rounded-lg">
+                  <p className="text-xs text-green-800 flex items-start">
+                    <CheckCircle size={14} className="mr-2 mt-0.5 flex-shrink-0" />
+                    <span>
+                      The refund has been successfully processed by the manufacturer. 
+                      The amount will reflect in the customer account within 5-7 business days 
+                      depending on their bank processing time.
+                    </span>
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Refund Processing Banner */}
+      {refundStatus === 'processing' && (
+        <div className="p-6 border-b border-gray-200">
+          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-xl p-6">
+            <div className="flex items-start space-x-4">
+              <div className="w-12 h-12 bg-blue-500 rounded-full flex items-center justify-center flex-shrink-0">
+                <Loader2 size={28} className="text-white animate-spin" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-xl font-bold text-blue-900 mb-2 flex items-center">
+                  Refund Processing
+                </h3>
+                <p className="text-blue-700">
+                  The manufacturer is processing your refund of {formatCurrency(order.totalAmount || 0)}.
+                  This usually takes 3-5 business days.
+                </p>
+                {refundDetails?.transactionId && (
+                  <div className="mt-3 bg-white/60 p-3 rounded-lg">
+                    <p className="text-sm text-blue-800 mb-1">Transaction ID</p>
+                    <p className="text-xs font-mono text-blue-900 break-all">
+                      {refundDetails.transactionId}
+                    </p>
+                  </div>
+                )}
+                <div className="mt-4">
+                  <button
+                    onClick={handleRefreshRefundStatus}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition flex items-center text-sm"
+                  >
+                    <RefreshCw size={14} className="mr-2" />
+                    Check Refund Status
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -2142,6 +2566,51 @@ const getAvailableActions = () => {
                     <p className="text-sm text-red-600 mt-1">
                       ✓ Refund requested to manufacturer
                     </p>
+                  )}
+                  {/* Refund Status Details */}
+                  {step.refundStep && step.isActive && (
+                    <div className="mt-2 p-3 bg-orange-50 border border-orange-200 rounded-lg max-w-md">
+                      <p className="text-sm font-semibold text-orange-900 mb-1">Refund Status:</p>
+                      {order.returnRequest?.refundDetails?.amount && (
+                        <p className="text-sm text-orange-800">
+                          <strong>Amount:</strong> ₹{order.returnRequest.refundDetails.amount.toLocaleString()}
+                        </p>
+                      )}
+                      {order.returnRequest?.refundDetails?.transactionId && (
+                        <p className="text-sm text-orange-800">
+                          <strong>Transaction ID:</strong> {order.returnRequest.refundDetails.transactionId}
+                        </p>
+                      )}
+                      {order.returnRequest?.refundDetails?.processedAt && (
+                        <p className="text-sm text-orange-800">
+                          <strong>Processed:</strong> {formatDate(order.returnRequest.refundDetails.processedAt)}
+                        </p>
+                      )}
+                      {step.status === 'refund_pending' && (
+                        <p className="text-xs text-orange-700 mt-2">
+                          <Clock size={12} className="inline mr-1" />
+                          Manufacturer is reviewing the refund request
+                        </p>
+                      )}
+                      {step.status === 'refund_processing' && (
+                        <p className="text-xs text-orange-700 mt-2">
+                          <Loader2 size={12} className="inline mr-1 animate-spin" />
+                          Refund is being processed. Expected within 5-7 business days
+                        </p>
+                      )}
+                      {step.status === 'refund_completed' && (
+                        <p className="text-xs text-green-700 mt-2 font-semibold">
+                          <CheckSquare size={12} className="inline mr-1" />
+                          Refund has been successfully processed!
+                        </p>
+                      )}
+                      {(step.status === 'refund_rejected' || step.status === 'refund_failed') && (
+                        <p className="text-xs text-red-700 mt-2 font-semibold">
+                          <XCircle size={12} className="inline mr-1" />
+                          Refund {step.status === 'refund_rejected' ? 'was rejected' : 'failed'}. Please contact support.
+                        </p>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
@@ -2292,6 +2761,17 @@ const getAvailableActions = () => {
             <Navigation size={18} className="mr-2" />
             Navigate to Address
           </a>
+
+          {/* Manual Refresh for Refund Status */}
+          {refundStatus && refundStatus !== 'completed' && (
+            <button
+              onClick={handleRefreshRefundStatus}
+              className="px-6 py-3 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition flex items-center"
+            >
+              <RefreshCw size={18} className="mr-2" />
+              Refresh Refund Status
+            </button>
+          )}
         </div>
 
         {/* Important Instructions */}
@@ -2359,6 +2839,22 @@ const getAvailableActions = () => {
               <>
                 <li>Refund has been requested to the manufacturer</li>
                 <li>Manufacturer will process the refund within 5-7 business days</li>
+                <li>Click "Check Refund Status" to see the latest update</li>
+              </>
+            )}
+            {refundStatus === 'processing' && (
+              <>
+                <li><strong>Refund is being processed by manufacturer</strong></li>
+                <li>Estimated completion: 3-5 business days</li>
+                <li>Click "Refresh Refund Status" to check for updates</li>
+              </>
+            )}
+            {refundStatus === 'completed' && (
+              <>
+                <li><strong>Refund has been successfully processed!</strong></li>
+                <li>Amount: {formatCurrency(refundDetails?.amount || order.totalAmount || 0)}</li>
+                <li>Transaction ID: {refundDetails?.transactionId || 'N/A'}</li>
+                <li>Processed on: {refundDetails?.processedAt ? formatDate(refundDetails.processedAt) : 'N/A'}</li>
               </>
             )}
             {!isReturnFlow && order.status === 'delivered' && (

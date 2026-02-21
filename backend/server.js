@@ -3896,6 +3896,27 @@ apiRouter.post('/delivery/orders/:orderId/initiate-return', authenticateToken, a
 
 /* ===================== ADMIN ROUTES ===================== */
 
+apiRouter.get('/admin/stats', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Access denied. Admins only.' });
+    }
+
+    const totalUsers = await User.countDocuments();
+    const activeUsers = await User.countDocuments({ isActive: true });
+    const inactiveUsers = await User.countDocuments({ isActive: false });
+    const usersByRole = await User.aggregate([
+      { $group: { _id: '$role', count: { $sum: 1 } } }
+    ]);
+
+    res.json({ totalUsers, activeUsers, inactiveUsers, usersByRole });
+
+  } catch (err) {
+    console.error('❌ Error fetching stats:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 apiRouter.get('/admin/users', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'admin') {
@@ -3903,7 +3924,7 @@ apiRouter.get('/admin/users', authenticateToken, async (req, res) => {
     }
 
     const users = await User.find().select('-password').sort({ createdAt: -1 });
-    res.json(users);
+    res.json({ users });
 
   } catch (err) {
     console.error('❌ Error fetching users:', err);

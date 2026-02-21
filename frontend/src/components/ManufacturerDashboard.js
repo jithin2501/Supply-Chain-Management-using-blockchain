@@ -1015,7 +1015,7 @@ const fetchRefundStats = useCallback(async () => {
               className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition font-medium ${activeTab === 'marketplace' ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-600 hover:bg-gray-50'}`}
             >
               <ShoppingCart size={20} />
-              <span>SMarketplace</span>
+              <span>Marketplace</span>
             </button>
             <button 
               onClick={() => setActiveTab('bought')} 
@@ -1030,13 +1030,6 @@ const fetchRefundStats = useCallback(async () => {
             >
               <Boxes size={20} />
               <span>My Products</span>
-            </button>
-            <button 
-              onClick={() => setActiveTab('orders')} 
-              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition font-medium ${activeTab === 'orders' ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-600 hover:bg-gray-50'}`}
-            >
-              <History size={20} />
-              <span>Blockchain Ledger</span>
             </button>
             <button 
               onClick={() => setActiveTab('revenue')} 

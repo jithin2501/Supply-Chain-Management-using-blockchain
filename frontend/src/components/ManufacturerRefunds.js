@@ -1147,8 +1147,8 @@ export default function ManufacturerRefunds() {
 
       {/* Process Refund Modal */}
       {showProcessModal && selectedRefund && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-8">
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-md w-full p-8 my-8 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center space-x-3 mb-6">
               {action === 'approve' ? (
                 <CheckCircle size={32} className="text-green-600" />
