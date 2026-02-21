@@ -734,6 +734,7 @@ apiRouter.get('/supplier/purchased-materials', authenticateToken, async (req, re
   }
 });
 
+
 /* ===================== MANUFACTURER ROUTES ===================== */
 
 apiRouter.post('/manufacturer/purchase', authenticateToken, async (req, res) => {
@@ -4095,6 +4096,34 @@ apiRouter.put('/admin/users/:userId/status', authenticateToken, async (req, res)
 
   } catch (err) {
     console.error('❌ Error updating user status:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+apiRouter.delete('/admin/users/:userId', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Access denied. Admins only.' });
+    }
+
+    const { userId } = req.params;
+
+    if (userId === req.user.userId) {
+      return res.status(400).json({ message: 'You cannot delete your own account.' });
+    }
+
+    const user = await User.findByIdAndDelete(userId);
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    console.log('\u2705 User ' + user.email + ' deleted by admin');
+
+    res.json({ message: 'User deleted successfully' });
+
+  } catch (err) {
+    console.error('\u274c Error deleting user:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
